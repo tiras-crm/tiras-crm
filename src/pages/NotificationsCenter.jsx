@@ -11,7 +11,7 @@ import {
   getDocs,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { useAuth } from "../hooks/useAuth";
+import { useAuth } from "../contexts/AuthContext";
 
 // ── Icon primitives ──────────────────────────────────────────────────────────
 const Icon = ({ d, size = 18, color = "currentColor", ...rest }) => (
