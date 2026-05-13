@@ -164,7 +164,7 @@ export const FollowUpCalendar = () => <Placeholder name="Follow-up Calendar View
 
 export { AgentDashboard } from "./AgentDashboard";
 export { MyLeadsList } from "./MyLeadsList";
-export const LeadDetailPage = () => <Placeholder name="Lead Detail Page" />;
+export { LeadDetailPage } from "./LeadDetailPage";
 export const ClickToCallInterface = () => <Placeholder name="Click to Call Interface" />;
 export const AddEditLead = () => <Placeholder name="Add / Edit Lead" />;
 export const MyFollowUps = () => <Placeholder name="My Follow-ups" />;
