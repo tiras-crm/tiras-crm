@@ -158,7 +158,7 @@ export const CompanySettings = () => <Placeholder name="Company Settings" />;
 export { ManagerDashboard } from "./ManagerDashboard";
 export { MyTeamLeads } from "./MyTeamLeads";
 export { AgentPerformance } from "./AgentPerformance";
-export const FollowUpCalendar = () => <Placeholder name="Follow-up Calendar View" />;
+export { FollowUpCalendar } from "./FollowUpCalendar";
 
 // ─── Agent Pages (6) ────────────────────────────────────────────────────────
 
