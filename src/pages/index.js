@@ -178,5 +178,5 @@ export { HelpCenter } from "./HelpCenter";
 
 // ─── Public Pages (2) ───────────────────────────────────────────────────────
 
-export const LandingPage = () => <Placeholder name="Landing Page" />;
+export { LandingPage } from "./LandingPage";
 export const PricingPage = () => <Placeholder name="Pricing Page" />;
