@@ -132,7 +132,7 @@ const getWeek = (name) => {
 // ─── Auth Pages (2) ─────────────────────────────────────────────────────────
 
 export { LoginPage } from "./LoginPage";
-export const ForgotPasswordPage = () => <Placeholder name="Forgot Password Page" />;
+export { ForgotPasswordPage } from "./ForgotPasswordPage";
 
 // ─── Platform Owner Pages (5) ───────────────────────────────────────────────
 
