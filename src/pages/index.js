@@ -174,7 +174,7 @@ export const MyFollowUps = () => <Placeholder name="My Follow-ups" />;
 export { NotificationsCenter } from "./NotificationsCenter";
 export { ProfileSettings } from "./ProfileSettings";
 export { SupportTicketCreateView } from "./SupportTicketCreateView";
-export const HelpCenter = () => <Placeholder name="Help Center" />;
+export { HelpCenter } from "./HelpCenter";
 
 // ─── Public Pages (2) ───────────────────────────────────────────────────────
 
