@@ -172,7 +172,7 @@ export const MyFollowUps = () => <Placeholder name="My Follow-ups" />;
 // ─── Shared Pages — All Roles (4) ───────────────────────────────────────────
 
 export { NotificationsCenter } from "./NotificationsCenter";
-export const ProfileSettings = () => <Placeholder name="Profile Settings" />;
+export { ProfileSettings } from "./ProfileSettings";
 export const SupportTicketCreateView = () => <Placeholder name="Support Ticket Create / View" />;
 export const HelpCenter = () => <Placeholder name="Help Center" />;
 
