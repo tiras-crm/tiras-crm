@@ -144,7 +144,7 @@ export const PlatformAnalytics = () => <Placeholder name="Platform Analytics" />
 
 // ─── Company Admin Pages (8) ────────────────────────────────────────────────
 
-export const AdminDashboard = () => <Placeholder name="God View Dashboard" />;
+export { AdminDashboard } from "./AdminDashboard";
 export const TeamManagement = () => <Placeholder name="Team Management" />;
 export const AllLeadsView = () => <Placeholder name="All Leads View" />;
 export const PipelineKanban = () => <Placeholder name="Pipeline Kanban Board" />;
