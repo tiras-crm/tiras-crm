@@ -155,7 +155,7 @@ export const CompanySettings = () => <Placeholder name="Company Settings" />;
 
 // ─── Manager Pages (4) ──────────────────────────────────────────────────────
 
-export const ManagerDashboard = () => <Placeholder name="Manager Dashboard" />;
+export { ManagerDashboard } from "./ManagerDashboard";
 export const MyTeamLeads = () => <Placeholder name="My Team Leads" />;
 export const AgentPerformance = () => <Placeholder name="Agent Performance Comparison" />;
 export const FollowUpCalendar = () => <Placeholder name="Follow-up Calendar View" />;
