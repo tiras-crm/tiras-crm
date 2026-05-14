@@ -41,3 +41,4 @@ export const ROLES = {
 };
 
 export default app;
+export const functions = null;
