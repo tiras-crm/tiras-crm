@@ -129,54 +129,34 @@ const getWeek = (name) => {
   return "?";
 };
 
-// ─── Auth Pages (2) ─────────────────────────────────────────────────────────
-
 export { LoginPage } from "./LoginPage";
 export { ForgotPasswordPage } from "./ForgotPasswordPage";
-
-// ─── Platform Owner Pages (5) ───────────────────────────────────────────────
-
-export const PlatformDashboard = () => <Placeholder name="Platform Dashboard" />;
-export const CompaniesList = () => <Placeholder name="Companies List" />;
-export const CompanyDetailView = () => <Placeholder name="Company Detail View" />;
-export const SubscriptionBillingManager = () => <Placeholder name="Subscription & Billing Manager" />;
-export const PlatformAnalytics = () => <Placeholder name="Platform Analytics" />;
-
-// ─── Company Admin Pages (8) ────────────────────────────────────────────────
-
+export { PlatformDashboard } from "./PlatformDashboard";
+export { CompaniesList } from "./CompaniesList";
+export { CompanyDetailView } from "./CompanyDetailView";
+export { SubscriptionBillingManager } from "./SubscriptionBillingManager";
+export { PlatformAnalytics } from "./PlatformAnalytics";
 export { AdminDashboard } from "./AdminDashboard";
-export const TeamManagement = () => <Placeholder name="Team Management" />;
-export const AllLeadsView = () => <Placeholder name="All Leads View" />;
-export const PipelineKanban = () => <Placeholder name="Pipeline Kanban Board" />;
-export const CallRecordingsLibrary = () => <Placeholder name="Call Recordings Library" />;
-export const SupportTicketsOverview = () => <Placeholder name="Support Tickets Overview" />;
-export const ReportsAnalytics = () => <Placeholder name="Reports & Analytics" />;
-export const CompanySettings = () => <Placeholder name="Company Settings" />;
-
-// ─── Manager Pages (4) ──────────────────────────────────────────────────────
-
+export { TeamManagement } from "./TeamManagement";
+export { AllLeadsView } from "./AllLeadsView";
+export { PipelineKanban } from "./PipelineKanban";
+export { CallRecordingsLibrary } from "./CallRecordingsLibrary";
+export { SupportTicketsOverview } from "./SupportTicketsOverview";
+export { ReportsAnalytics } from "./ReportsAnalytics";
+export { CompanySettings } from "./CompanySettings";
 export { ManagerDashboard } from "./ManagerDashboard";
 export { MyTeamLeads } from "./MyTeamLeads";
 export { AgentPerformance } from "./AgentPerformance";
 export { FollowUpCalendar } from "./FollowUpCalendar";
-
-// ─── Agent Pages (6) ────────────────────────────────────────────────────────
-
 export { AgentDashboard } from "./AgentDashboard";
 export { MyLeadsList } from "./MyLeadsList";
 export { LeadDetailPage } from "./LeadDetailPage";
 export { ClickToCallInterface } from "./ClickToCallInterface";
-export const AddEditLead = () => <Placeholder name="Add / Edit Lead" />;
-export const MyFollowUps = () => <Placeholder name="My Follow-ups" />;
-
-// ─── Shared Pages — All Roles (4) ───────────────────────────────────────────
-
+export { AddEditLead } from "./AddEditLead";
+export { MyFollowUps } from "./MyFollowUps";
 export { NotificationsCenter } from "./NotificationsCenter";
 export { ProfileSettings } from "./ProfileSettings";
 export { SupportTicketCreateView } from "./SupportTicketCreateView";
 export { HelpCenter } from "./HelpCenter";
-
-// ─── Public Pages (2) ───────────────────────────────────────────────────────
-
 export { LandingPage } from "./LandingPage";
-export const PricingPage = () => <Placeholder name="Pricing Page" />;
+export { PricingPage } from "./PricingPage";
