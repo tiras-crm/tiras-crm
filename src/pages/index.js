@@ -131,6 +131,10 @@ const getWeek = (name) => {
 
 export { LoginPage } from "./LoginPage";
 export { ForgotPasswordPage } from "./ForgotPasswordPage";
+export { RegisterPage } from "./RegisterPage";
+export { SubscribePage } from "./SubscribePage";
+export { WalletPage } from "./WalletPage";
+export { UsagePage } from "./UsagePage";
 export { PlatformDashboard } from "./PlatformDashboard";
 export { CompaniesList } from "./CompaniesList";
 export { CompanyDetailView } from "./CompanyDetailView";
