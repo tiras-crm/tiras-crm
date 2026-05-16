@@ -1,0 +1,1352 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIRAS CRM V2 — Global Stylesheet
+   Fixes mobile layout across all 35 pages automatically
+   Import in src/index.js: import './styles/global.css';
+   Design system: Obsidian Gold
+   Breakpoints:
+     Mobile  : max-width 640px
+     Tablet  : max-width 768px
+     Desktop : min-width 769px
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Google Fonts ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1. HARD RESET & ROOT
+═══════════════════════════════════════════════════════════════════════════ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;   /* Prevent iOS font-size boost on landscape */
+  scroll-behavior: smooth;
+  height: 100%;
+}
+
+body {
+  font-family: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #F5F5F5;
+  background-color: #121212;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;               /* No horizontal scroll anywhere — hard rule */
+  min-height: 100%;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+/* ─── Links ─────────────────────────────────────────────────────────────── */
+a {
+  color: inherit;
+  text-decoration: none;
+}
+a:hover { opacity: 0.85; }
+
+/* ─── Images & media ─────────────────────────────────────────────────────── */
+img, video, svg, canvas {
+  max-width: 100%;
+  display: block;
+}
+
+/* ─── Form elements inherit fonts ────────────────────────────────────────── */
+button, input, select, textarea, label {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Remove number spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] { -moz-appearance: textfield; }
+
+/* Dark select dropdowns */
+select option {
+  background-color: #1A1A1B;
+  color: #F5F5F5;
+}
+
+/* ─── Selection color ────────────────────────────────────────────────────── */
+::selection      { background-color: rgba(212, 175, 55, 0.25); color: #F5F5F5; }
+::-moz-selection { background-color: rgba(212, 175, 55, 0.25); color: #F5F5F5; }
+
+/* ─── Focus ring — gold, accessible ─────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid #D4AF37;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ─── Scrollbars ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar               { width: 6px; height: 6px; }
+::-webkit-scrollbar-track         { background: #1A1A1B; }
+::-webkit-scrollbar-thumb         { background: #2A2A2B; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover   { background: #3A3A3B; }
+::-webkit-scrollbar-corner        { background: #1A1A1B; }
+*                                 { scrollbar-width: thin; scrollbar-color: #2A2A2B #1A1A1B; }
+
+/* ─── Drag cursors for Kanban ────────────────────────────────────────────── */
+[draggable="true"]        { cursor: grab; user-select: none; }
+[draggable="true"]:active { cursor: grabbing; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2. APP SHELL LAYOUT
+   Sidebar (220px) + main content column
+   Mobile: sidebar hidden as overlay, content is full width
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Outer shell — flex row */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background-color: #121212;
+  overflow-x: hidden;
+}
+
+/* Main content column — sits to the right of sidebar on desktop */
+.main-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;           /* Prevent flex overflow blowing out the layout */
+  overflow-x: hidden;
+  width: 100%;
+}
+
+/* Scrollable content area below navbar */
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+}
+
+/* Page inner padding wrapper — use this class on every page root div */
+.content-padding {
+  padding: 24px;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+@media (max-width: 1024px) {
+  .content-padding { padding: 20px; }
+}
+
+@media (max-width: 768px) {
+  .content-padding { padding: 16px; }
+}
+
+@media (max-width: 640px) {
+  .content-padding { padding: 12px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3. SIDEBAR — MOBILE OVERLAY
+   Sidebar.jsx injects its own open/close classes
+   These rules make the overlay system work correctly
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Sidebar base — sticky on desktop */
+.tiras-sidebar {
+  width: 220px;
+  min-height: 100vh;
+  flex-shrink: 0;
+  transition: transform 0.25s ease;
+}
+
+/* Overlay backdrop */
+.tiras-sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(2px);
+  z-index: 199;
+  animation: sidebar-fade-in 0.2s ease;
+}
+
+@keyframes sidebar-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes sidebar-slide-in {
+  from { transform: translateX(-100%); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+
+/* Mobile: sidebar becomes a fixed overlay panel */
+@media (max-width: 768px) {
+  .tiras-sidebar {
+    position: fixed !important;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    z-index: 200;
+    transform: translateX(-100%);
+    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.8);
+    overflow-y: auto;
+  }
+
+  .tiras-sidebar.open {
+    transform: translateX(0);
+    animation: sidebar-slide-in 0.25s ease;
+  }
+
+  .tiras-sidebar-overlay {
+    display: block;   /* Shown only on mobile */
+  }
+
+  /* Main content: full width — no left offset */
+  .main-column {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
+}
+
+/* Desktop: sidebar always visible, no transform needed */
+@media (min-width: 769px) {
+  .tiras-sidebar {
+    position: sticky;
+    top: 0;
+    transform: none !important;
+  }
+
+  .tiras-sidebar-overlay {
+    display: none !important;
+  }
+
+  .tiras-mobile-close {
+    display: none !important;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4. NAVBAR — MOBILE
+   Hamburger + logo + bell visible
+   Username text, wallet badge collapse on very small screens
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Hamburger — hidden on desktop */
+.tiras-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #9A9A9A;
+  border-radius: 6px;
+  transition: color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.tiras-hamburger:hover { color: #F5F5F5; }
+
+@media (max-width: 768px) {
+  .tiras-hamburger { display: flex; }
+
+  /* Username text beside avatar — hidden on mobile */
+  .navbar-username { display: none !important; }
+
+  /* Wallet badge — collapse to icon-only on very small screens */
+  .wallet-badge-label { display: none; }
+}
+
+@media (min-width: 769px) {
+  .tiras-hamburger    { display: none !important; }
+  .navbar-username    { display: block; }
+  .wallet-badge-label { display: inline; }
+}
+
+/* Navbar page title — shrink on mobile */
+.navbar-page-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #F5F5F5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 640px) {
+  .navbar-page-title { font-size: 15px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5. STAT CARDS GRID
+   Desktop: 4-5 columns | Tablet: 2-3 | Mobile: 2 always
+═══════════════════════════════════════════════════════════════════════════ */
+
+.stat-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+@media (max-width: 1024px) {
+  .stat-cards-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .stat-cards-grid {
+    grid-template-columns: repeat(2, 1fr);  /* Always 2 on mobile — master doc rule */
+    gap: 10px;
+  }
+}
+
+/* Individual stat card */
+.stat-card {
+  background-color: #1A1A1B;
+  border: 1px solid #2A2A2B;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .stat-card { padding: 14px 12px; }
+}
+
+/* Stat number — shrinks on mobile */
+.stat-number {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  color: #D4AF37;
+}
+
+@media (max-width: 1024px) {
+  .stat-number { font-size: 26px; }
+}
+
+@media (max-width: 640px) {
+  .stat-number { font-size: 22px; }   /* Cap at 22px on mobile */
+}
+
+.stat-label {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: #9A9A9A;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+@media (max-width: 640px) {
+  .stat-label { font-size: 11px; }
+}
+
+.stat-sub {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  color: #555555;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6. GENERAL CARD LAYOUT
+═══════════════════════════════════════════════════════════════════════════ */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .card-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .card-grid { gap: 10px; }
+}
+
+.card-gap { gap: 16px; }
+
+@media (max-width: 768px) {
+  .card-gap { gap: 12px; }
+}
+
+@media (max-width: 640px) {
+  .card-gap { gap: 10px; }
+}
+
+/* Two-column layout — side by side on desktop, stacked on mobile */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .two-col {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+/* Three-column layout */
+.three-col {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1024px) {
+  .three-col { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 640px) {
+  .three-col {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7. TYPOGRAPHY — PAGE TITLES & SECTION HEADERS
+═══════════════════════════════════════════════════════════════════════════ */
+
+.page-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: #F5F5F5;
+  line-height: 1.2;
+}
+
+@media (max-width: 768px) {
+  .page-title { font-size: 18px; }
+}
+
+@media (max-width: 640px) {
+  .page-title { font-size: 16px; }   /* Cap at 16px on mobile */
+}
+
+.section-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #F5F5F5;
+}
+
+@media (max-width: 640px) {
+  .section-title { font-size: 15px; }
+}
+
+.card-title {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #F5F5F5;
+}
+
+.body-text {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: #F5F5F5;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .body-text { font-size: 13px; }
+}
+
+.label-text {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: #9A9A9A;
+}
+
+.muted-text {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  color: #555555;
+}
+
+/* Mono for amounts, IDs, timestamps */
+.mono-text {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8. BUTTONS — MOBILE TOUCH TARGETS
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* All buttons — minimum 44px tap target — master doc rule */
+button,
+[role="button"] {
+  min-height: 44px;
+  touch-action: manipulation;     /* Prevent double-tap zoom */
+  cursor: pointer;
+}
+
+/* Exception: icon-only small buttons (explicitly opt out) */
+button.btn-sm,
+button.btn-icon {
+  min-height: 32px;
+}
+
+/* Primary button */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: #D4AF37;
+  color: #000000;
+  border: none;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 20px;
+  min-height: 44px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2);
+}
+
+.btn-primary:hover {
+  background-color: #E2C04A;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(212, 175, 55, 0.3);
+}
+
+.btn-primary:active { transform: translateY(0); }
+
+/* Secondary button */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: transparent;
+  color: #F5F5F5;
+  border: 1px solid #2A2A2B;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 20px;
+  min-height: 44px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  border-color: #D4AF37;
+  color: #D4AF37;
+}
+
+/* Danger button */
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: #E63946;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 20px;
+  min-height: 44px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-danger:hover { background-color: #F04550; transform: translateY(-1px); }
+
+/* Full width on mobile for primary actions */
+@media (max-width: 640px) {
+  .btn-primary-full { width: 100%; }
+  .btn-block-mobile { width: 100%; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9. FORM INPUTS
+═══════════════════════════════════════════════════════════════════════════ */
+
+.form-input {
+  width: 100%;
+  background-color: #121212;
+  border: 1px solid #2A2A2B;
+  border-radius: 8px;
+  color: #F5F5F5;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  padding: 10px 14px;
+  min-height: 44px;
+  outline: none;
+  transition: border-color 0.15s ease;
+  box-sizing: border-box;
+}
+
+.form-input:focus {
+  border-color: #D4AF37;
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.15);
+}
+
+.form-input::placeholder { color: #555555; }
+
+.form-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-label {
+  display: block;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: #9A9A9A;
+  margin-bottom: 6px;
+}
+
+.form-error {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  color: #E63946;
+  margin-top: 4px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Two-column form grid — stacks on mobile */
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .form-grid-3 { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 640px) {
+  .form-grid-3 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10. TABLES — HIDE ON MOBILE, SHOW CARD VIEW
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Desktop: table visible, card list hidden */
+.desktop-table-view { display: block; }
+.mobile-card-view   { display: none;  }
+
+/* Mobile: card list visible, table hidden */
+@media (max-width: 640px) {
+  .desktop-table-view { display: none !important;  }
+  .mobile-card-view   { display: block !important; }
+}
+
+/* Table wrapper — horizontal scroll when table must show on tablet */
+.table-scroll-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #2A2A2B #1A1A1B;
+  border-radius: 12px;
+}
+
+/* Data table base */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 560px;         /* Forces scroll on tablet before hiding on mobile */
+  table-layout: auto;
+}
+
+.data-table th {
+  background-color: rgba(255, 255, 255, 0.02);
+  color: #9A9A9A;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 10px 16px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid #2A2A2B;
+}
+
+.data-table td {
+  padding: 12px 16px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  color: #F5F5F5;
+  border-bottom: 1px solid rgba(42, 42, 43, 0.6);
+  vertical-align: middle;
+}
+
+.data-table tr:hover td {
+  background-color: #222223;
+}
+
+/* Mobile card row — used as table replacement on small screens */
+.mobile-list-item {
+  background-color: #1A1A1B;
+  border: 1px solid #2A2A2B;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.mobile-list-item:hover {
+  border-color: rgba(212, 175, 55, 0.4);
+}
+
+.mobile-list-item:active {
+  background-color: #222223;
+}
+
+.mobile-list-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   11. KANBAN BOARD — MOBILE HORIZONTAL SCROLL
+═══════════════════════════════════════════════════════════════════════════ */
+
+.kanban-container {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 12px;             /* Space for horizontal scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: #2A2A2B #1A1A1B;
+}
+
+.kanban-board {
+  display: flex;
+  gap: 12px;
+  min-width: max-content;
+  height: 100%;
+  padding: 4px 0;
+}
+
+.kanban-column {
+  width: 280px;
+  min-width: 280px;             /* Each column is 280px — one visible at a time on mobile */
+  background-color: #1A1A1B;
+  border: 1px solid #2A2A2B;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 180px);
+  overflow: hidden;
+}
+
+.kanban-column-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid #2A2A2B;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background-color: #1A1A1B;
+  z-index: 1;
+}
+
+.kanban-column-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scrollbar-width: thin;
+}
+
+.kanban-card {
+  background-color: #121212;
+  border: 1px solid #2A2A2B;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.15s ease;
+  touch-action: none;             /* Required for drag-and-drop on mobile */
+}
+
+.kanban-card:hover   { border-color: rgba(212, 175, 55, 0.4); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); }
+.kanban-card:active  { cursor: grabbing; opacity: 0.9; }
+
+/* On mobile — show scroll hint */
+@media (max-width: 768px) {
+  .kanban-column { width: 260px; min-width: 260px; }
+}
+
+@media (max-width: 640px) {
+  .kanban-column { width: 240px; min-width: 240px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   12. CHARTS — PREVENT OVERFLOW
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* All chart containers — must not overflow their parent */
+.chart-container {
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Recharts SVG must scale with container */
+.chart-container svg {
+  overflow: visible;
+  width: 100%;
+}
+
+/* Recharts tooltip — fix z-index and prevent overflow */
+.recharts-tooltip-wrapper {
+  z-index: 50 !important;
+  max-width: 200px;
+}
+
+@media (max-width: 640px) {
+  /* Reduce chart height on mobile */
+  .chart-container-sm { height: 200px !important; }
+  .chart-container-md { height: 240px !important; }
+  .chart-container-lg { height: 280px !important; }
+
+  /* Hide chart legends on very small screens — too cluttered */
+  .recharts-legend-wrapper { display: none; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   13. BADGE & STATUS CHIPS
+═══════════════════════════════════════════════════════════════════════════ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.badge-gold    { background-color: rgba(212,175,55,0.12); color: #D4AF37; }
+.badge-green   { background-color: rgba(16,185,129,0.12); color: #10B981; }
+.badge-red     { background-color: rgba(230,57,70,0.12);  color: #E63946; }
+.badge-amber   { background-color: rgba(245,158,11,0.12); color: #F59E0B; }
+.badge-blue    { background-color: rgba(59,130,246,0.12); color: #3B82F6; }
+.badge-purple  { background-color: rgba(139,92,246,0.12); color: #8B5CF6; }
+.badge-grey    { background-color: rgba(107,114,128,0.12);color: #6B7280; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   14. MODALS
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Modal backdrop */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: modal-fade-in 0.2s ease;
+}
+
+@keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Modal panel */
+.modal-panel {
+  background-color: #1A1A1B;
+  border: 1px solid #2A2A2B;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+  width: 100%;
+  max-width: 460px;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: modal-slide-in 0.2s ease;
+}
+
+@keyframes modal-slide-in {
+  from { opacity: 0; transform: scale(0.95) translateY(-8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);    }
+}
+
+/* On mobile: modal takes most of the screen */
+@media (max-width: 640px) {
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-panel {
+    max-width: 100%;
+    width: 100%;
+    border-radius: 16px 16px 0 0;  /* Bottom sheet style on mobile */
+    max-height: 85vh;
+    animation: modal-slide-up 0.25s ease;
+  }
+
+  @keyframes modal-slide-up {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0);    }
+  }
+}
+
+/* Modal header */
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 24px 24px 0;
+  gap: 12px;
+}
+
+.modal-body    { padding: 16px 24px 24px; }
+.modal-footer  { padding: 0 24px 24px; display: flex; gap: 8px; justify-content: flex-end; }
+
+@media (max-width: 640px) {
+  .modal-footer { flex-direction: column-reverse; }
+  .modal-footer .btn-primary,
+  .modal-footer .btn-secondary { width: 100%; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   15. LEAD DETAIL PAGE — TIMELINE
+═══════════════════════════════════════════════════════════════════════════ */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 16px;
+  padding-bottom: 20px;
+  position: relative;
+}
+
+/* Vertical line connecting items */
+.timeline-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background-color: #2A2A2B;
+}
+
+.timeline-dot {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+}
+
+.timeline-content {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .timeline-item { gap: 10px; }
+  .timeline-dot  { width: 28px; height: 28px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   16. CALL INTERFACE — DIALPAD
+═══════════════════════════════════════════════════════════════════════════ */
+
+.dialpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  max-width: 240px;
+  margin: 0 auto;
+}
+
+.dialpad-key {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #1A1A1B;
+  border: 1px solid #2A2A2B;
+  border-radius: 50%;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: #F5F5F5;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: 56px;
+  touch-action: manipulation;
+}
+
+.dialpad-key:hover  { background-color: rgba(212, 175, 55, 0.1); border-color: #D4AF37; }
+.dialpad-key:active { background-color: rgba(212, 175, 55, 0.2); transform: scale(0.95); }
+
+@media (max-width: 640px) {
+  .dialpad-grid { max-width: 200px; gap: 8px; }
+  .dialpad-key  { font-size: 16px; min-height: 52px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   17. PAGE-LEVEL LAYOUT HELPERS
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Page header row — title on left, actions on right */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .page-header {
+    flex-direction: column;
+    margin-bottom: 16px;
+    gap: 10px;
+  }
+
+  /* Actions go full width on mobile */
+  .page-header-actions {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+  }
+
+  .page-header-actions .btn-primary { flex: 1; }
+}
+
+/* Section spacing */
+.section-gap { margin-bottom: 24px; }
+
+@media (max-width: 640px) {
+  .section-gap { margin-bottom: 16px; }
+}
+
+/* Flex row that stacks on mobile */
+.flex-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .flex-row-stack {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Hide on mobile */
+.hide-mobile { display: block; }
+
+@media (max-width: 640px) {
+  .hide-mobile { display: none !important; }
+}
+
+/* Show only on mobile */
+.show-mobile { display: none; }
+
+@media (max-width: 640px) {
+  .show-mobile { display: block !important; }
+}
+
+/* Hide on desktop */
+.hide-desktop { display: none; }
+
+@media (max-width: 768px) {
+  .hide-desktop { display: block !important; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   18. PROGRESS BARS
+═══════════════════════════════════════════════════════════════════════════ */
+
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background-color: #2A2A2B;
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.6s ease;
+}
+
+@media (max-width: 640px) {
+  .progress-bar-track { height: 6px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   19. EMPTY STATE
+═══════════════════════════════════════════════════════════════════════════ */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 24px;
+  width: 100%;
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .empty-state { padding: 32px 16px; gap: 12px; }
+}
+
+.empty-state-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .empty-state-icon { width: 56px; height: 56px; border-radius: 12px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   20. TOAST NOTIFICATIONS
+═══════════════════════════════════════════════════════════════════════════ */
+
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+  width: 100%;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .toast-container {
+    bottom: 0;
+    right: 0;
+    left: 0;
+    max-width: 100%;
+    padding: 0 0 env(safe-area-inset-bottom, 0);
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   21. SAFE AREA — IPHONE NOTCH / HOME INDICATOR
+═══════════════════════════════════════════════════════════════════════════ */
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   22. PRINT
+═══════════════════════════════════════════════════════════════════════════ */
+
+@media print {
+  body { background: #ffffff; color: #000000; }
+  .tiras-sidebar,
+  .tiras-hamburger,
+  .navbar-actions,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger { display: none !important; }
+  .main-column { margin-left: 0 !important; }
+  .data-table th,
+  .data-table td { border: 1px solid #cccccc; color: #000000; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   23. ANIMATIONS — SHARED PAGE TRANSITIONS
+═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0);     }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position:  600px 0; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1;   }
+  50%       { opacity: 0.5; }
+}
+
+/* Apply to page root divs for entry animation */
+.page-enter {
+  animation: fade-in-up 0.3s ease both;
+}
+
+/* Skeleton shimmer blocks */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #1A1A1B 0%,
+    #222223 40%,
+    #1A1A1B 80%
+  );
+  background-size: 600px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+/* Spinner */
+.spinner {
+  border-radius: 50%;
+  border: 3px solid #2A2A2B;
+  border-top-color: #D4AF37;
+  animation: spin 0.75s linear infinite;
+}
