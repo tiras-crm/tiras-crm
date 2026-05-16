@@ -342,6 +342,9 @@ const AppRoutes = () => (
         path="/platform/analytics"
         element={<AppShell><PlatformAnalytics /></AppShell>}
       />
+      <Route 
+        path="/platform/announcements" 
+        element={<ProtectedRoute roles={["platform_owner"]}><AnnouncementsManager /></ProtectedRoute>} />
     </Route>
 
     {/* ── Company Admin — own company only ──────────────────────────────────
