@@ -126,6 +126,7 @@ const getNavSections = (role) => {
           { to: "/platform/companies",  icon: MdCorporateFare,    label: "Companies"      },
           { to: "/platform/billing",    icon: MdAttachMoney,      label: "Billing"        },
           { to: "/platform/analytics",  icon: MdAnalytics,        label: "Analytics"      },
+          { icon: "📢", label: "Announcements", path: "/platform/announcements" }
         ]},
         { label: "Account", items: shared },
       ];
