@@ -1,644 +1,238 @@
-// TIRAS CRM — AllLeadsView.jsx
-// Company Admin — every lead across all agents, filterable, sortable, bulk-actionable
+// TIRAS CRM V2 — AllLeadsView.jsx  (UPPARA account)
+// Real-time leads via onSnapshot · desktop DataTable · mobile cards
+// CSV import · bulk assign/stage/delete · search + filters
 //
-// USAGE: In src/pages/index.js replace:
-//   export const AllLeadsView = () => <Placeholder name="All Leads View" />;
-// with:
-//   export { AllLeadsView } from "./AllLeadsView";
+// src/pages/AllLeadsView.jsx
+// export { AllLeadsView } from "./AllLeadsView";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  collection, query, where, getDocs, doc,
+  collection, query, where, getDocs, doc, onSnapshot,
   updateDoc, deleteDoc, serverTimestamp, orderBy,
 } from "firebase/firestore";
 import { db, COLLECTIONS } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  COLORS, FONTS, SPACING, RADIUS, SHADOWS, STYLES, TRANSITIONS,
-} from "../theme";
-import {
-  RiSearchLine, RiFilterLine, RiAddLine, RiDownloadLine,
-  RiLoader4Line, RiUserLine, RiPhoneLine, RiDeleteBinLine,
-  RiEditLine, RiArrowUpLine, RiArrowDownLine, RiArrowLeftLine,
-  RiArrowRightLine, RiCheckboxLine, RiCheckboxBlankLine,
-  RiFireLine, RiTempColdLine, RiSkullLine, RiAlertLine,
-  RiRefreshLine, RiFundsLine,
+  RiSearchLine, RiAddLine, RiDownloadLine, RiUploadLine,
+  RiLoader4Line, RiDeleteBinLine, RiEditLine, RiPhoneLine,
+  RiCheckboxLine, RiCheckboxBlankLine, RiArrowUpLine,
+  RiArrowDownLine, RiArrowLeftLine, RiArrowRightLine,
+  RiFundsLine, RiCheckLine, RiAlertLine, RiFilterLine,
 } from "react-icons/ri";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── V2 tokens ────────────────────────────────────────────────────────────────
+const C={bg:"#121212",surface:"#1A1A1B",surfaceHov:"#202022",surfaceAct:"#232325",gold:"#D4AF37",goldMuted:"rgba(212,175,55,0.12)",goldBorder:"rgba(212,175,55,0.25)",red:"#E63946",redMuted:"rgba(230,57,70,0.12)",text:"#F5F5F5",sub:"#9A9A9A",border:"#2A2A2B",success:"#2ECC71",successMuted:"rgba(46,204,113,0.12)",warning:"#F39C12",warningMuted:"rgba(243,156,18,0.12)",info:"#3498DB",infoMuted:"rgba(52,152,219,0.12)"};
+const FH="'Playfair Display',Georgia,serif";const FB="'DM Sans',system-ui,sans-serif";
+const R={sm:"6px",md:"8px",lg:"12px",xl:"16px",full:"9999px"};const SH={sm:"0 1px 3px rgba(0,0,0,0.4)",md:"0 4px 16px rgba(0,0,0,0.5)"};const TR="all 0.15s ease";
 
-const STAGES = [
-  "New", "Contacted", "Interested", "Follow-up",
-  "Negotiation", "Closed Won", "Closed Lost",
-];
+const STAGES=["New","Contacted","Interested","Follow-up","Negotiation","Closed Won","Closed Lost"];
+const SOURCES=["IndiaMART","Website","Cold Call","Referral","Walk-in","Social Media","WhatsApp","Trade Show","Other"];
+const PAGE_SIZE=25;
 
-const SOURCES = [
-  "IndiaMART", "Website", "Cold Call", "Referral",
-  "Walk-in", "Social Media", "WhatsApp", "Trade Show", "Other",
-];
+const STAGE_C={"New":C.info,"Contacted":C.gold,"Interested":"#E67E22","Follow-up":C.warning,"Negotiation":"#9B59B6","Closed Won":C.success,"Closed Lost":C.red};
+const SCORE_C={hot:{l:"🔥 Hot",c:"#FF6B35"},warm:{l:"♨ Warm",c:C.warning},cold:{l:"❄ Cold",c:C.info},dead:{l:"☠ Dead",c:C.sub}};
 
-const STAGE_COLOR = {
-  "New":         COLORS.info,
-  "Contacted":   COLORS.primary,
-  "Interested":  COLORS.accent,
-  "Follow-up":   COLORS.warning,
-  "Negotiation": "#9B59B6",
-  "Closed Won":  COLORS.success,
-  "Closed Lost": COLORS.danger,
-};
+const formatINR=(n)=>{if(!n)return"—";if(n>=100000)return`₹${(n/100000).toFixed(1)}L`;if(n>=1000)return`₹${(n/1000).toFixed(1)}K`;return`₹${n.toLocaleString("en-IN")}`;};
+const relTime=(ts)=>{if(!ts)return"—";const d=ts.toDate?ts.toDate():new Date(ts),s=Math.floor((Date.now()-d)/1000);if(s<60)return"Just now";if(s<3600)return`${Math.floor(s/60)}m ago`;if(s<86400)return`${Math.floor(s/3600)}h ago`;return`${Math.floor(s/86400)}d ago`;};
 
-const SCORE_CFG = {
-  hot:  { label: "🔥 Hot",  color: COLORS.hot,  bg: COLORS.hot  + "22" },
-  warm: { label: "♨ Warm", color: COLORS.warm, bg: COLORS.warm + "22" },
-  cold: { label: "❄ Cold", color: COLORS.cold, bg: COLORS.cold + "22" },
-  dead: { label: "☠ Dead", color: COLORS.dead, bg: COLORS.dead + "22" },
-};
+const SK=({w="100%",h="14px",r=R.md})=>(<div style={{width:w,height:h,borderRadius:r,background:`linear-gradient(90deg,${C.surface} 25%,#232325 50%,${C.surface} 75%)`,backgroundSize:"200% 100%",animation:"v2Shimmer 1.6s ease-in-out infinite",flexShrink:0}}/>);
+const Toast=({msg,type="success"})=>{const col=type==="error"?C.red:C.success;return(<div style={{position:"fixed",bottom:"24px",right:"24px",backgroundColor:C.surfaceAct,border:`1px solid ${col}50`,borderLeft:`3px solid ${col}`,borderRadius:R.md,padding:"10px 18px",display:"flex",alignItems:"center",gap:"8px",boxShadow:SH.md,zIndex:3000,fontFamily:FB,fontSize:"13px",color:C.text,animation:"v2SlideIn 0.25s ease"}}>{type==="error"?<RiAlertLine size={14} color={col}/>:<RiCheckLine size={14} color={col}/>}{msg}</div>);};
 
-const PAGE_SIZE = 25;
+const StageBadge=({stage})=>{const col=STAGE_C[stage]||C.sub;return(<span style={{fontSize:"11px",fontWeight:600,fontFamily:FB,color:col,backgroundColor:col+"22",border:`1px solid ${col}35`,borderRadius:R.full,padding:"3px 10px",whiteSpace:"nowrap"}}>{stage||"—"}</span>);};
+const ScoreBadge=({score})=>{const cfg=SCORE_C[score];if(!cfg)return<span style={{color:C.sub,fontSize:"11px"}}>—</span>;return(<span style={{fontSize:"11px",fontWeight:600,fontFamily:FB,color:cfg.c,backgroundColor:cfg.c+"20",borderRadius:R.full,padding:"3px 10px",whiteSpace:"nowrap"}}>{cfg.l}</span>);};
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const SelBtn=({style={},children,...rest})=>(<button style={{backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"13px",fontWeight:500,padding:"6px 14px",cursor:"pointer",transition:TR,...style}} {...rest}>{children}</button>);
 
-const formatINR = (n) => {
-  if (!n) return "—";
-  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
-  if (n >= 1000)   return `₹${(n / 1000).toFixed(1)}K`;
-  return `₹${n.toLocaleString("en-IN")}`;
-};
+export const AllLeadsView=()=>{
+  const {companyId}=useAuth();
+  const [leads,setLeads]=useState([]);
+  const [agents,setAgents]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState("");
+  const [filterStage,setFilterStage]=useState("all");
+  const [filterAgent,setFilterAgent]=useState("all");
+  const [filterScore,setFilterScore]=useState("all");
+  const [sortKey,setSortKey]=useState("createdAt");
+  const [sortDir,setSortDir]=useState("desc");
+  const [page,setPage]=useState(1);
+  const [selected,setSelected]=useState(new Set());
+  const [deleteTarget,setDeleteTarget]=useState(null);
+  const [deleting,setDeleting]=useState(false);
+  const [toast,setToast]=useState(null);
+  const [importing,setImporting]=useState(false);
 
-const relativeTime = (ts) => {
-  if (!ts) return "—";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  const s = Math.floor((Date.now() - d) / 1000);
-  if (s < 60)    return "Just now";
-  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 604800) return `${Math.floor(s / 86400)}d ago`;
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-};
+  const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
 
-// ─── Small reusable bits ──────────────────────────────────────────────────────
-
-const StageBadge = ({ stage }) => {
-  const color = STAGE_COLOR[stage] || COLORS.textMuted;
-  return (
-    <span style={{
-      fontSize: FONTS.size.xs, fontWeight: FONTS.weight.semibold,
-      color, backgroundColor: color + "22",
-      border: `1px solid ${color}35`,
-      borderRadius: RADIUS.full, padding: `2px ${SPACING.sm}`,
-      whiteSpace: "nowrap",
-    }}>
-      {stage || "—"}
-    </span>
-  );
-};
-
-const ScoreBadge = ({ score }) => {
-  const cfg = SCORE_CFG[score];
-  if (!cfg) return <span style={{ color: COLORS.textMuted, fontSize: FONTS.size.xs }}>—</span>;
-  return (
-    <span style={{
-      fontSize: FONTS.size.xs, fontWeight: FONTS.weight.semibold,
-      color: cfg.color, backgroundColor: cfg.bg,
-      borderRadius: RADIUS.full, padding: `2px ${SPACING.sm}`,
-      whiteSpace: "nowrap",
-    }}>
-      {cfg.label}
-    </span>
-  );
-};
-
-const FilterSelect = ({ value, onChange, children, width = "160px" }) => (
-  <select
-    value={value}
-    onChange={(e) => onChange(e.target.value)}
-    style={{
-      ...STYLES.input, width, padding: `${SPACING.sm} ${SPACING.md}`,
-      appearance: "none", cursor: "pointer", flexShrink: 0,
-    }}
-  >
-    {children}
-  </select>
-);
-
-// ─── Bulk Action Bar ──────────────────────────────────────────────────────────
-
-const BulkBar = ({ count, agents, stages, onAssign, onStage, onDelete, onClear }) => (
-  <div style={{
-    position: "fixed", bottom: SPACING.xl,
-    left: "50%", transform: "translateX(-50%)",
-    backgroundColor: COLORS.surfaceActive,
-    border: `1px solid ${COLORS.primary}60`,
-    borderRadius: RADIUS.lg,
-    padding: `${SPACING.sm} ${SPACING.base}`,
-    display: "flex", alignItems: "center", gap: SPACING.md,
-    boxShadow: SHADOWS.lg, zIndex: 500,
-    boxSizing: "border-box",
-  }}>
-    <span style={{ fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.primary, whiteSpace: "nowrap" }}>
-      {count} selected
-    </span>
-    <div style={{ width: "1px", height: "20px", backgroundColor: COLORS.border }} />
-
-    <select
-      defaultValue=""
-      onChange={(e) => { if (e.target.value) { onAssign(e.target.value); e.target.value = ""; } }}
-      style={{ ...STYLES.input, width: "160px", padding: `4px ${SPACING.sm}`, fontSize: FONTS.size.sm }}
-    >
-      <option value="">Assign to agent…</option>
-      {agents.map(a => <option key={a.id} value={a.id}>{a.displayName || a.email}</option>)}
-    </select>
-
-    <select
-      defaultValue=""
-      onChange={(e) => { if (e.target.value) { onStage(e.target.value); e.target.value = ""; } }}
-      style={{ ...STYLES.input, width: "150px", padding: `4px ${SPACING.sm}`, fontSize: FONTS.size.sm }}
-    >
-      <option value="">Change stage…</option>
-      {stages.map(s => <option key={s} value={s}>{s}</option>)}
-    </select>
-
-    <button
-      onClick={onDelete}
-      style={{
-        background: COLORS.dangerMuted, border: `1px solid ${COLORS.danger}40`,
-        borderRadius: RADIUS.base, color: COLORS.danger, cursor: "pointer",
-        padding: `4px ${SPACING.md}`, fontSize: FONTS.size.sm,
-        fontWeight: FONTS.weight.semibold, fontFamily: FONTS.family,
-        display: "flex", alignItems: "center", gap: "4px",
-      }}
-    >
-      <RiDeleteBinLine size={13} /> Delete
-    </button>
-
-    <button
-      onClick={onClear}
-      style={{
-        background: "none", border: "none", color: COLORS.textSecondary,
-        cursor: "pointer", padding: `4px ${SPACING.sm}`,
-        fontSize: FONTS.size.sm, fontFamily: FONTS.family,
-      }}
-    >
-      Clear
-    </button>
-  </div>
-);
-
-// ─── AllLeadsView ─────────────────────────────────────────────────────────────
-
-export const AllLeadsView = () => {
-  const { companyId } = useAuth();
-
-  const [leads, setLeads]         = useState([]);
-  const [agents, setAgents]       = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  // Filters
-  const [search, setSearch]           = useState("");
-  const [filterStage, setFilterStage] = useState("all");
-  const [filterAgent, setFilterAgent] = useState("all");
-  const [filterScore, setFilterScore] = useState("all");
-  const [filterSource, setFilterSource] = useState("all");
-
-  // Sort
-  const [sortKey, setSortKey]   = useState("createdAt");
-  const [sortDir, setSortDir]   = useState("desc"); // asc | desc
-
-  // Pagination
-  const [page, setPage] = useState(1);
-
-  // Selection
-  const [selected, setSelected] = useState(new Set());
-
-  // Delete confirm
-  const [deleteTargets, setDeleteTargets] = useState(null); // Set of ids
-  const [deleting, setDeleting]           = useState(false);
-
-  // ── Loaders ─────────────────────────────────────────────────────────────
-  const loadData = useCallback(async () => {
-    if (!companyId) return;
-    try {
-      const [leadsSnap, usersSnap] = await Promise.all([
-        getDocs(query(
-          collection(db, COLLECTIONS.LEADS),
-          where("companyId", "==", companyId),
-          orderBy("createdAt", "desc"),
-        )),
-        getDocs(query(
-          collection(db, COLLECTIONS.USERS),
-          where("companyId", "==", companyId),
-          where("role", "in", ["agent", "manager"]),
-        )),
-      ]);
-      setLeads(leadsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setAgents(usersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (err) {
-      console.error("AllLeadsView: loadData error:", err);
-    }
-  }, [companyId]);
-
-  useEffect(() => {
-    setLoading(true);
-    loadData().finally(() => setLoading(false));
-  }, [loadData]);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
-  };
-
-  // ── Filter + sort ────────────────────────────────────────────────────────
-  const filtered = useMemo(() => {
-    let list = [...leads];
-    const q = search.toLowerCase();
-    if (q) list = list.filter(l =>
-      l.name?.toLowerCase().includes(q) ||
-      l.phone?.includes(q) ||
-      l.email?.toLowerCase().includes(q)
+  // onSnapshot for leads
+  useEffect(()=>{
+    if(!companyId)return;
+    const unsub=onSnapshot(
+      query(collection(db,COLLECTIONS.LEADS),where("companyId","==",companyId),orderBy("createdAt","desc")),
+      (snap)=>{setLeads(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);},
+      (err)=>{console.error("AllLeadsView snap:",err);setLoading(false);}
     );
-    if (filterStage !== "all")  list = list.filter(l => l.stage === filterStage);
-    if (filterAgent !== "all")  list = list.filter(l => l.agentId === filterAgent);
-    if (filterScore !== "all")  list = list.filter(l => l.leadScore === filterScore);
-    if (filterSource !== "all") list = list.filter(l => l.source === filterSource);
+    getDocs(query(collection(db,COLLECTIONS.USERS),where("companyId","==",companyId),where("role","in",["agent","manager"]))).then(s=>setAgents(s.docs.map(d=>({id:d.id,...d.data()}))));
+    return()=>unsub();
+  },[companyId]);
 
-    list.sort((a, b) => {
-      let av = a[sortKey], bv = b[sortKey];
-      if (av?.toDate) av = av.toDate().getTime();
-      if (bv?.toDate) bv = bv.toDate().getTime();
-      if (typeof av === "string") av = av.toLowerCase();
-      if (typeof bv === "string") bv = bv.toLowerCase();
-      if (av < bv) return sortDir === "asc" ? -1 : 1;
-      if (av > bv) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
+  // Filter + sort
+  const filtered=useMemo(()=>{
+    let list=[...leads];
+    const q=search.toLowerCase();
+    if(q)list=list.filter(l=>l.name?.toLowerCase().includes(q)||l.phone?.includes(q)||l.email?.toLowerCase().includes(q));
+    if(filterStage!=="all")list=list.filter(l=>l.stage===filterStage);
+    if(filterAgent!=="all")list=list.filter(l=>l.agentId===filterAgent);
+    if(filterScore!=="all")list=list.filter(l=>l.leadScore===filterScore);
+    list.sort((a,b)=>{let av=a[sortKey],bv=b[sortKey];if(av?.toDate)av=av.toDate().getTime();if(bv?.toDate)bv=bv.toDate().getTime();if(typeof av==="string")av=av.toLowerCase();if(typeof bv==="string")bv=bv.toLowerCase();if(av<bv)return sortDir==="asc"?-1:1;if(av>bv)return sortDir==="asc"?1:-1;return 0;});
     return list;
-  }, [leads, search, filterStage, filterAgent, filterScore, filterSource, sortKey, sortDir]);
+  },[leads,search,filterStage,filterAgent,filterScore,sortKey,sortDir]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages=Math.max(1,Math.ceil(filtered.length/PAGE_SIZE));
+  const paginated=filtered.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);
+  useEffect(()=>{setPage(1);setSelected(new Set());},[search,filterStage,filterAgent,filterScore]);
 
-  // Reset to page 1 on filter change
-  useEffect(() => { setPage(1); setSelected(new Set()); },
-    [search, filterStage, filterAgent, filterScore, filterSource]);
+  const toggleSort=(key)=>{if(sortKey===key)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortKey(key);setSortDir("asc");}};
+  const toggleSel=(id)=>setSelected(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
+  const allSel=paginated.length>0&&paginated.every(l=>selected.has(l.id));
+  const toggleAll=()=>setSelected(allSel?new Set():new Set(paginated.map(l=>l.id)));
 
-  // ── Sort handler ─────────────────────────────────────────────────────────
-  const handleSort = (key) => {
-    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
-    else { setSortKey(key); setSortDir("asc"); }
+  const bulkAssign=async(agentId)=>{const agent=agents.find(a=>a.id===agentId);await Promise.all([...selected].map(id=>updateDoc(doc(db,COLLECTIONS.LEADS,id),{agentId,agentName:agent?.displayName||"",updatedAt:serverTimestamp()})));setSelected(new Set());showToast(`${selected.size} leads assigned`);};
+  const bulkStage=async(stage)=>{await Promise.all([...selected].map(id=>updateDoc(doc(db,COLLECTIONS.LEADS,id),{stage,updatedAt:serverTimestamp()})));setSelected(new Set());showToast(`${selected.size} leads moved to ${stage}`);};
+  const bulkDelete=async()=>{setDeleting(true);try{await Promise.all([...deleteTarget].map(id=>deleteDoc(doc(db,COLLECTIONS.LEADS,id))));setSelected(new Set());showToast(`${deleteTarget.size} leads deleted`);}catch(e){showToast("Delete failed","error");}finally{setDeleting(false);setDeleteTarget(null);}};
+
+  const exportCSV=()=>{const rows=[["Name","Phone","Email","Stage","Score","Source","Agent","Deal Value","Created"],...filtered.map(l=>[l.name||"",l.phone||"",l.email||"",l.stage||"",l.leadScore||"",l.source||"",l.agentName||"",l.dealValue||"",l.createdAt?.toDate?.().toLocaleDateString("en-IN")||""])];const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));const a=document.createElement("a");a.href=url;a.download="tiras-leads.csv";a.click();URL.revokeObjectURL(url);showToast("CSV exported");};
+
+  // CSV import
+  const handleCSVImport=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    setImporting(true);
+    try{
+      const text=await file.text();
+      const rows=text.trim().split("\n").map(r=>r.split(",").map(c=>c.replace(/^"|"$/g,"").trim()));
+      const headers=rows[0].map(h=>h.toLowerCase());
+      const nameIdx=headers.findIndex(h=>h.includes("name"));
+      const phoneIdx=headers.findIndex(h=>h.includes("phone")||h.includes("mobile"));
+      const emailIdx=headers.findIndex(h=>h.includes("email"));
+      const sourceIdx=headers.findIndex(h=>h.includes("source"));
+      if(nameIdx===-1){showToast("CSV must have a Name column","error");setImporting(false);return;}
+      const {addDoc}=await import("firebase/firestore");
+      let count=0;
+      for(const row of rows.slice(1)){
+        if(!row[nameIdx]?.trim())continue;
+        await addDoc(collection(db,COLLECTIONS.LEADS),{name:row[nameIdx]||"",phone:phoneIdx>=0?row[phoneIdx]||"":"",email:emailIdx>=0?row[emailIdx]||"":"",source:sourceIdx>=0?row[sourceIdx]||"Other":"Other",stage:"New",companyId,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+        count++;
+      }
+      showToast(`${count} leads imported`);
+    }catch(err){console.error("CSV import:",err);showToast("Import failed — check CSV format","error");}
+    finally{setImporting(false);e.target.value="";}
   };
 
-  // ── Selection ────────────────────────────────────────────────────────────
-  const toggleSelect = (id) => {
-    setSelected(prev => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-  };
-  const toggleAll = () => {
-    if (selected.size === paginated.length) setSelected(new Set());
-    else setSelected(new Set(paginated.map(l => l.id)));
-  };
+  const ColH=({label,ck,style={}})=>(<div onClick={ck?()=>toggleSort(ck):undefined} style={{fontFamily:FB,fontSize:"10px",fontWeight:600,color:sortKey===ck?C.gold:C.sub,textTransform:"uppercase",letterSpacing:"0.08em",cursor:ck?"pointer":"default",display:"flex",alignItems:"center",gap:"3px",userSelect:"none",...style}}>{label}{ck&&sortKey===ck&&(sortDir==="asc"?<RiArrowUpLine size={10}/>:<RiArrowDownLine size={10}/>)}</div>);
 
-  // ── Bulk actions ─────────────────────────────────────────────────────────
-  const bulkAssign = async (agentId) => {
-    const agent = agents.find(a => a.id === agentId);
-    await Promise.all([...selected].map(id =>
-      updateDoc(doc(db, COLLECTIONS.LEADS, id), {
-        agentId, agentName: agent?.displayName || "",
-        updatedAt: serverTimestamp(),
-      })
-    ));
-    await loadData();
-    setSelected(new Set());
-  };
+  const COLS="32px 1fr 120px 100px 120px 110px 90px";
+  const hotCount=leads.filter(l=>l.leadScore==="hot").length;
+  const pipelineVal=leads.reduce((s,l)=>s+(l.dealValue||0),0);
 
-  const bulkStage = async (stage) => {
-    await Promise.all([...selected].map(id =>
-      updateDoc(doc(db, COLLECTIONS.LEADS, id), { stage, updatedAt: serverTimestamp() })
-    ));
-    await loadData();
-    setSelected(new Set());
-  };
-
-  const bulkDelete = async () => {
-    setDeleting(true);
-    try {
-      await Promise.all([...deleteTargets].map(id =>
-        deleteDoc(doc(db, COLLECTIONS.LEADS, id))
-      ));
-      await loadData();
-      setSelected(new Set());
-    } finally {
-      setDeleting(false);
-      setDeleteTargets(null);
-    }
-  };
-
-  // ── CSV Export ───────────────────────────────────────────────────────────
-  const exportCSV = () => {
-    const rows = [
-      ["Name","Phone","Email","Stage","Score","Source","Agent","Deal Value","Created"],
-      ...filtered.map(l => [
-        l.name || "", l.phone || "", l.email || "",
-        l.stage || "", l.leadScore || "", l.source || "",
-        l.agentName || "", l.dealValue || "",
-        l.createdAt?.toDate?.().toLocaleDateString("en-IN") || "",
-      ]),
-    ];
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href = url; a.download = "tiras-leads.csv"; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // ── Column header component ──────────────────────────────────────────────
-  const ColHeader = ({ label, sortable, colKey, style = {} }) => (
-    <div
-      onClick={sortable ? () => handleSort(colKey) : undefined}
-      style={{
-        fontSize: FONTS.size.xs, fontWeight: FONTS.weight.semibold,
-        color: sortKey === colKey ? COLORS.primary : COLORS.textMuted,
-        textTransform: "uppercase", letterSpacing: "0.06em",
-        cursor: sortable ? "pointer" : "default",
-        display: "flex", alignItems: "center", gap: "3px",
-        userSelect: "none", ...style,
-      }}
-    >
-      {label}
-      {sortable && sortKey === colKey && (
-        sortDir === "asc" ? <RiArrowUpLine size={11} /> : <RiArrowDownLine size={11} />
-      )}
-    </div>
-  );
-
-  const allPageSelected = paginated.length > 0 && paginated.every(l => selected.has(l.id));
-
-  // ── Summary stats ────────────────────────────────────────────────────────
-  const hotCount     = leads.filter(l => l.leadScore === "hot").length;
-  const closedWon    = leads.filter(l => l.stage === "Closed Won").length;
-  const pipelineVal  = leads.reduce((s, l) => s + (l.dealValue || 0), 0);
-
-  // grid col template
-  const COLS = "36px 1fr 130px 110px 130px 130px 110px 90px";
-
-  return (
-    <div style={{
-      backgroundColor: COLORS.background, minHeight: "calc(100vh - 60px)",
-      padding: `${SPACING["2xl"]} ${SPACING["2xl"]}`,
-      fontFamily: FONTS.family, boxSizing: "border-box",
-    }}>
+  return(
+    <div style={{backgroundColor:C.bg,minHeight:"calc(100vh - 56px)",padding:"28px",fontFamily:FB,boxSizing:"border-box"}}>
       <style>{`
-        @keyframes tirasSpinKf { from{transform:rotate(0)} to{transform:rotate(360deg)} }
-        .tl-row:hover { background-color: ${COLORS.surfaceHover} !important; }
-        select option { background: ${COLORS.surface}; color: ${COLORS.textPrimary}; }
+        @keyframes v2Shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+        @keyframes v2FadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes v2SlideIn{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes v2Spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        .al-row:hover{background-color:${C.surfaceHov} !important;}
+        select option{background:${C.surface};color:${C.text};}
+        @media(max-width:640px){.al-table{display:none !important;}.al-cards{display:flex !important;}.al-filters{flex-direction:column;}.al-header{flex-direction:column;align-items:flex-start;}}
       `}</style>
 
       {/* Header */}
-      <div style={{
-        display: "flex", justifyContent: "space-between",
-        alignItems: "flex-start", flexWrap: "wrap",
-        gap: SPACING.base, marginBottom: SPACING.xl,
-      }}>
+      <div className="al-header" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"12px",marginBottom:"24px",animation:"v2FadeUp 0.3s ease"}}>
         <div>
-          <h1 style={{ margin: 0, fontSize: FONTS.size["4xl"], fontWeight: FONTS.weight.bold, color: COLORS.textPrimary, letterSpacing: "-0.5px" }}>
-            All Leads
-          </h1>
-          <p style={{ margin: `${SPACING.xs} 0 0`, fontSize: FONTS.size.base, color: COLORS.textSecondary }}>
-            Every lead across your company — filterable, sortable, bulk-actionable.
-          </p>
+          <h1 style={{margin:0,fontFamily:FH,fontSize:"clamp(24px,3vw,36px)",fontWeight:700,color:C.text,letterSpacing:"-0.5px"}}>All Leads</h1>
+          <p style={{margin:"6px 0 0",fontSize:"14px",color:C.sub}}>Every lead across your company — live updates.</p>
         </div>
-        <div style={{ display: "flex", gap: SPACING.sm }}>
-          <button onClick={handleRefresh} disabled={refreshing} style={{ ...STYLES.buttonSecondary, padding: `${SPACING.sm} ${SPACING.md}`, display: "flex", alignItems: "center", gap: SPACING.xs, opacity: refreshing ? 0.4 : 1 }}>
-            <RiRefreshLine size={15} style={{ animation: refreshing ? "tirasSpinKf 0.7s linear infinite" : "none" }} />
-          </button>
-          <button onClick={exportCSV} style={{ ...STYLES.buttonSecondary, display: "flex", alignItems: "center", gap: SPACING.xs }}>
-            <RiDownloadLine size={15} /> Export CSV
-          </button>
-          <button style={{ ...STYLES.buttonPrimary, display: "flex", alignItems: "center", gap: SPACING.xs }}>
-            <RiAddLine size={16} /> Add Lead
-          </button>
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+          <label style={{backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"13px",fontWeight:500,padding:"9px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px",minHeight:"44px",whiteSpace:"nowrap"}}>
+            {importing?<RiLoader4Line size={14} style={{animation:"v2Spin 0.8s linear infinite"}}/>:<RiUploadLine size={14}/>}Import CSV
+            <input type="file" accept=".csv" onChange={handleCSVImport} style={{display:"none"}} disabled={importing}/>
+          </label>
+          <button onClick={exportCSV} style={{backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"13px",fontWeight:500,padding:"9px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px",minHeight:"44px"}}><RiDownloadLine size={14}/>Export</button>
+          <button style={{backgroundColor:C.gold,color:"#000",border:"none",borderRadius:R.md,fontFamily:FB,fontSize:"14px",fontWeight:700,padding:"9px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px",minHeight:"44px"}}><RiAddLine size={15}/>Add Lead</button>
         </div>
       </div>
 
       {/* Summary pills */}
-      <div style={{ display: "flex", gap: SPACING.md, marginBottom: SPACING.lg, flexWrap: "wrap" }}>
-        {[
-          { label: "Total Leads", value: leads.length, color: COLORS.info },
-          { label: "Hot Leads",   value: hotCount,     color: COLORS.hot },
-          { label: "Closed Won",  value: closedWon,    color: COLORS.success },
-          { label: "Pipeline Value", value: formatINR(pipelineVal), color: COLORS.accent },
-        ].map(s => (
-          <div key={s.label} style={{
-            backgroundColor: COLORS.surface, border: `1px solid ${COLORS.border}`,
-            borderRadius: RADIUS.lg, padding: `${SPACING.sm} ${SPACING.base}`,
-            display: "flex", alignItems: "center", gap: SPACING.sm,
-          }}>
-            <span style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary }}>{s.label}:</span>
-            <span style={{ fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold, color: s.color }}>{loading ? "—" : s.value}</span>
-          </div>
-        ))}
+      <div style={{display:"flex",gap:"10px",marginBottom:"18px",flexWrap:"wrap",animation:"v2FadeUp 0.3s ease 0.05s both"}}>
+        {[{l:"Total Leads",v:leads.length,c:C.info},{l:"🔥 Hot Leads",v:hotCount,c:"#FF6B35"},{l:"Pipeline Value",v:formatINR(pipelineVal),c:C.gold}].map(s=>(<div key={s.l} style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,padding:"8px 16px",display:"flex",alignItems:"center",gap:"8px"}}><span style={{fontFamily:FB,fontSize:"12px",color:C.sub}}>{s.l}:</span><span style={{fontFamily:FB,fontSize:"15px",fontWeight:700,color:s.c}}>{loading?"—":s.v}</span></div>))}
       </div>
 
       {/* Filters */}
-      <div style={{ display: "flex", gap: SPACING.sm, marginBottom: SPACING.base, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ position: "relative", flex: "1 1 200px", minWidth: "180px" }}>
-          <RiSearchLine size={15} color={COLORS.textMuted} style={{ position: "absolute", left: SPACING.md, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-          <input
-            type="text" placeholder="Name, phone or email…" value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ ...STYLES.input, paddingLeft: "34px" }}
-          />
+      <div className="al-filters" style={{display:"flex",gap:"8px",marginBottom:"14px",flexWrap:"wrap",alignItems:"center",animation:"v2FadeUp 0.3s ease 0.1s both"}}>
+        <div style={{position:"relative",flex:"1 1 180px",minWidth:"160px"}}>
+          <RiSearchLine size={14} color={C.sub} style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}/>
+          <input type="text" placeholder="Name, phone or email…" value={search} onChange={e=>setSearch(e.target.value)} style={{width:"100%",boxSizing:"border-box",backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"10px 14px 10px 34px",color:C.text,fontFamily:FB,fontSize:"13px",outline:"none"}}/>
         </div>
-        <FilterSelect value={filterStage} onChange={setFilterStage}>
-          <option value="all">All Stages</option>
-          {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
-        </FilterSelect>
-        <FilterSelect value={filterScore} onChange={setFilterScore} width="140px">
-          <option value="all">All Scores</option>
-          <option value="hot">🔥 Hot</option>
-          <option value="warm">♨ Warm</option>
-          <option value="cold">❄ Cold</option>
-          <option value="dead">☠ Dead</option>
-        </FilterSelect>
-        <FilterSelect value={filterAgent} onChange={setFilterAgent}>
-          <option value="all">All Agents</option>
-          {agents.map(a => <option key={a.id} value={a.id}>{a.displayName || a.email}</option>)}
-        </FilterSelect>
-        <FilterSelect value={filterSource} onChange={setFilterSource} width="150px">
-          <option value="all">All Sources</option>
-          {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
-        </FilterSelect>
-        <span style={{ fontSize: FONTS.size.sm, color: COLORS.textMuted, marginLeft: "auto" }}>
-          {loading ? "…" : `${filtered.length} leads`}
-        </span>
+        {[{val:filterStage,set:setFilterStage,opts:["all",...STAGES],placeholder:"All Stages"},{val:filterAgent,set:setFilterAgent,opts:["all",...agents.map(a=>a.id)],labels:{all:"All Agents",...Object.fromEntries(agents.map(a=>[a.id,a.displayName||a.email]))},placeholder:"All Agents"},{val:filterScore,set:setFilterScore,opts:["all","hot","warm","cold","dead"],labels:{all:"All Scores",hot:"🔥 Hot",warm:"♨ Warm",cold:"❄ Cold",dead:"☠ Dead"},placeholder:"All Scores"}].map((f,i)=>(<select key={i} value={f.val} onChange={e=>f.set(e.target.value)} style={{backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"10px 14px",color:f.val==="all"?C.sub:C.text,fontFamily:FB,fontSize:"13px",outline:"none",appearance:"none",cursor:"pointer",minWidth:"130px"}}>{f.opts.map(o=><option key={o} value={o}>{f.labels?f.labels[o]||o:o==="all"?f.placeholder:o}</option>)}</select>))}
+        {!loading&&<span style={{fontFamily:FB,fontSize:"13px",color:C.sub,marginLeft:"auto"}}>{filtered.length} leads</span>}
       </div>
 
-      {/* Table */}
-      <div style={{ backgroundColor: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: RADIUS.lg, overflow: "hidden" }}>
-        {/* Header row */}
-        <div style={{ display: "grid", gridTemplateColumns: COLS, padding: `${SPACING.sm} ${SPACING.lg}`, backgroundColor: COLORS.surfaceActive, borderBottom: `1px solid ${COLORS.border}`, gap: SPACING.base, alignItems: "center" }}>
-          <div
-            onClick={toggleAll}
-            style={{ cursor: "pointer", color: allPageSelected ? COLORS.primary : COLORS.textMuted, display: "flex", alignItems: "center" }}
-          >
-            {allPageSelected ? <RiCheckboxLine size={16} /> : <RiCheckboxBlankLine size={16} />}
-          </div>
-          <ColHeader label="Lead" sortable colKey="name" />
-          <ColHeader label="Stage" sortable colKey="stage" />
-          <ColHeader label="Score" />
-          <ColHeader label="Agent" sortable colKey="agentName" />
-          <ColHeader label="Source" />
-          <ColHeader label="Deal Value" sortable colKey="dealValue" />
-          <ColHeader label="Last Activity" sortable colKey="updatedAt" />
+      {/* Desktop table */}
+      <div className="al-table" style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,overflow:"hidden",animation:"v2FadeUp 0.3s ease 0.15s both"}}>
+        <div style={{display:"grid",gridTemplateColumns:COLS,padding:"10px 20px",backgroundColor:"rgba(255,255,255,0.02)",borderBottom:`1px solid ${C.border}`,gap:"12px",alignItems:"center"}}>
+          <div onClick={toggleAll} style={{cursor:"pointer",color:allSel?C.gold:C.sub,display:"flex",alignItems:"center"}}>{allSel?<RiCheckboxLine size={16}/>:<RiCheckboxBlankLine size={16}/>}</div>
+          <ColH label="Lead" ck="name"/><ColH label="Stage"/><ColH label="Score"/><ColH label="Agent" ck="agentName"/><ColH label="Deal Value" ck="dealValue"/><ColH label="Last Activity" ck="updatedAt"/>
         </div>
 
-        {/* Loading */}
-        {loading && (
-          <div style={{ padding: SPACING["5xl"], textAlign: "center" }}>
-            <RiLoader4Line size={26} color={COLORS.textMuted} style={{ animation: "tirasSpinKf 1s linear infinite" }} />
-            <div style={{ color: COLORS.textMuted, fontSize: FONTS.size.sm, marginTop: SPACING.sm }}>Loading leads…</div>
+        {loading&&(<div style={{padding:"48px",textAlign:"center"}}><RiLoader4Line size={24} color={C.sub} style={{animation:"v2Spin 1s linear infinite"}}/><div style={{fontFamily:FB,fontSize:"13px",color:C.sub,marginTop:"10px"}}>Loading leads…</div></div>)}
+        {!loading&&filtered.length===0&&(<div style={{padding:"48px",textAlign:"center"}}><RiFundsLine size={32} color={C.sub} style={{marginBottom:"12px"}}/><div style={{fontFamily:FH,fontSize:"16px",fontWeight:700,color:C.text,marginBottom:"6px"}}>{search||filterStage!=="all"?"No leads match":"No leads yet"}</div><div style={{fontFamily:FB,fontSize:"13px",color:C.sub}}>Add your first lead or import a CSV.</div></div>)}
+
+        {!loading&&paginated.map((lead,idx)=>(<div key={lead.id} className="al-row" style={{display:"grid",gridTemplateColumns:COLS,padding:"12px 20px",borderBottom:idx<paginated.length-1?`1px solid ${C.border}`:"none",gap:"12px",alignItems:"center",backgroundColor:selected.has(lead.id)?C.goldMuted:C.surface,transition:TR}}>
+          <div onClick={()=>toggleSel(lead.id)} style={{cursor:"pointer",color:selected.has(lead.id)?C.gold:C.sub,display:"flex"}}>{selected.has(lead.id)?<RiCheckboxLine size={15}/>:<RiCheckboxBlankLine size={15}/>}</div>
+          <div style={{minWidth:0}}><div style={{fontFamily:FB,fontSize:"14px",fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lead.name||"—"}</div><div style={{fontFamily:FB,fontSize:"11px",color:C.sub,display:"flex",alignItems:"center",gap:"3px",marginTop:"2px"}}><RiPhoneLine size={10}/>{lead.phone||"—"}</div></div>
+          <div><StageBadge stage={lead.stage}/></div>
+          <div><ScoreBadge score={lead.leadScore}/></div>
+          <div style={{fontFamily:FB,fontSize:"13px",color:C.sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lead.agentName||<span style={{color:C.sub,fontStyle:"italic"}}>Unassigned</span>}</div>
+          <div style={{fontFamily:FB,fontSize:"13px",color:lead.dealValue?C.gold:C.sub,fontWeight:lead.dealValue?600:400}}>{formatINR(lead.dealValue)}</div>
+          <div style={{fontFamily:FB,fontSize:"12px",color:C.sub}}>{relTime(lead.updatedAt||lead.createdAt)}</div>
+        </div>))}
+      </div>
+
+      {/* Mobile cards */}
+      <div className="al-cards" style={{display:"none",flexDirection:"column",gap:"10px",animation:"v2FadeUp 0.3s ease 0.15s both"}}>
+        {loading&&[1,2,3,4].map(i=>(<div key={i} style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,padding:"16px",display:"flex",flexDirection:"column",gap:"10px"}}><SK w="60%" h="18px"/><SK w="80%" h="14px"/><div style={{display:"flex",gap:"8px"}}><SK w="80px" h="22px" r={R.full}/><SK w="70px" h="22px" r={R.full}/></div></div>))}
+        {!loading&&paginated.map(lead=>(<div key={lead.id} style={{backgroundColor:C.surface,border:`1px solid ${selected.has(lead.id)?C.goldBorder:C.border}`,borderRadius:R.lg,padding:"16px",transition:TR}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:FB,fontSize:"15px",fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lead.name||"—"}</div>
+              <div style={{fontFamily:FB,fontSize:"12px",color:C.sub,marginTop:"2px",display:"flex",alignItems:"center",gap:"3px"}}><RiPhoneLine size={10}/>{lead.phone||"—"}</div>
+            </div>
+            <div onClick={()=>toggleSel(lead.id)} style={{cursor:"pointer",color:selected.has(lead.id)?C.gold:C.sub,marginLeft:"8px"}}>{selected.has(lead.id)?<RiCheckboxLine size={18}/>:<RiCheckboxBlankLine size={18}/>}</div>
           </div>
-        )}
-
-        {/* Empty */}
-        {!loading && filtered.length === 0 && (
-          <div style={{ padding: SPACING["5xl"], textAlign: "center" }}>
-            <RiFundsLine size={36} color={COLORS.textMuted} style={{ marginBottom: SPACING.md }} />
-            <div style={{ color: COLORS.textPrimary, fontWeight: FONTS.weight.semibold, marginBottom: SPACING.xs }}>
-              {search || filterStage !== "all" ? "No leads match your filters" : "No leads yet"}
-            </div>
-            <div style={{ color: COLORS.textSecondary, fontSize: FONTS.size.sm }}>
-              {search || filterStage !== "all" ? "Try clearing some filters." : "Add your first lead or import a CSV."}
-            </div>
+          <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"10px"}}><StageBadge stage={lead.stage}/><ScoreBadge score={lead.leadScore}/></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontFamily:FB,fontSize:"12px",color:C.sub}}>{lead.agentName||"Unassigned"} · {relTime(lead.updatedAt||lead.createdAt)}</span>
+            {lead.dealValue&&<span style={{fontFamily:FB,fontSize:"13px",fontWeight:700,color:C.gold}}>{formatINR(lead.dealValue)}</span>}
           </div>
-        )}
-
-        {/* Rows */}
-        {!loading && paginated.map((lead, idx) => (
-          <div
-            key={lead.id}
-            className="tl-row"
-            style={{
-              display: "grid", gridTemplateColumns: COLS,
-              padding: `${SPACING.md} ${SPACING.lg}`,
-              borderBottom: idx < paginated.length - 1 ? `1px solid ${COLORS.border}` : "none",
-              gap: SPACING.base, alignItems: "center",
-              backgroundColor: selected.has(lead.id) ? COLORS.primaryMuted : COLORS.surface,
-              transition: TRANSITIONS.fast,
-            }}
-          >
-            {/* Checkbox */}
-            <div
-              onClick={() => toggleSelect(lead.id)}
-              style={{ cursor: "pointer", color: selected.has(lead.id) ? COLORS.primary : COLORS.textMuted, display: "flex", alignItems: "center" }}
-            >
-              {selected.has(lead.id) ? <RiCheckboxLine size={16} /> : <RiCheckboxBlankLine size={16} />}
-            </div>
-
-            {/* Lead name + phone */}
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: FONTS.size.base, fontWeight: FONTS.weight.semibold, color: COLORS.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {lead.name || "—"}
-              </div>
-              <div style={{ fontSize: FONTS.size.xs, color: COLORS.textSecondary, display: "flex", alignItems: "center", gap: "3px", marginTop: "2px" }}>
-                <RiPhoneLine size={10} /> {lead.phone || "—"}
-              </div>
-            </div>
-
-            {/* Stage */}
-            <div><StageBadge stage={lead.stage} /></div>
-
-            {/* Score */}
-            <div><ScoreBadge score={lead.leadScore} /></div>
-
-            {/* Agent */}
-            <div style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {lead.agentName || <span style={{ color: COLORS.textMuted }}>Unassigned</span>}
-            </div>
-
-            {/* Source */}
-            <div style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {lead.source || "—"}
-            </div>
-
-            {/* Deal Value */}
-            <div style={{ fontSize: FONTS.size.sm, color: lead.dealValue ? COLORS.accent : COLORS.textMuted, fontWeight: lead.dealValue ? FONTS.weight.semibold : FONTS.weight.regular }}>
-              {formatINR(lead.dealValue)}
-            </div>
-
-            {/* Last Activity */}
-            <div style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary }}>
-              {relativeTime(lead.updatedAt || lead.createdAt)}
-            </div>
-          </div>
-        ))}
+        </div>))}
       </div>
 
       {/* Pagination */}
-      {!loading && filtered.length > PAGE_SIZE && (
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: SPACING.md, marginTop: SPACING.base }}>
-          <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={page === 1}
-            style={{ ...STYLES.buttonSecondary, padding: `${SPACING.sm} ${SPACING.md}`, opacity: page === 1 ? 0.4 : 1, display: "flex", alignItems: "center" }}
-          >
-            <RiArrowLeftLine size={15} />
-          </button>
-          <span style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary }}>
-            Page <strong style={{ color: COLORS.textPrimary }}>{page}</strong> of {totalPages}
-            &nbsp;·&nbsp;{filtered.length} leads
-          </span>
-          <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            style={{ ...STYLES.buttonSecondary, padding: `${SPACING.sm} ${SPACING.md}`, opacity: page === totalPages ? 0.4 : 1, display: "flex", alignItems: "center" }}
-          >
-            <RiArrowRightLine size={15} />
-          </button>
-        </div>
-      )}
+      {!loading&&filtered.length>PAGE_SIZE&&(<div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:"12px",marginTop:"16px"}}><button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:page===1?C.sub:C.text,padding:"8px 12px",cursor:page===1?"not-allowed":"pointer",opacity:page===1?0.4:1,display:"flex",alignItems:"center"}}><RiArrowLeftLine size={14}/></button><span style={{fontFamily:FB,fontSize:"13px",color:C.sub}}>Page <strong style={{color:C.text}}>{page}</strong> of {totalPages} · {filtered.length} leads</span><button onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages} style={{backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:page===totalPages?C.sub:C.text,padding:"8px 12px",cursor:page===totalPages?"not-allowed":"pointer",opacity:page===totalPages?0.4:1,display:"flex",alignItems:"center"}}><RiArrowRightLine size={14}/></button></div>)}
 
-      {/* Bulk Action Bar */}
-      {selected.size > 0 && (
-        <BulkBar
-          count={selected.size}
-          agents={agents}
-          stages={STAGES}
-          onAssign={bulkAssign}
-          onStage={bulkStage}
-          onDelete={() => setDeleteTargets(new Set(selected))}
-          onClear={() => setSelected(new Set())}
-        />
-      )}
+      {/* Bulk bar */}
+      {selected.size>0&&(<div style={{position:"fixed",bottom:"24px",left:"50%",transform:"translateX(-50%)",backgroundColor:C.surfaceAct,border:`1px solid ${C.goldBorder}`,borderRadius:R.lg,padding:"10px 16px",display:"flex",alignItems:"center",gap:"10px",boxShadow:SH.md,zIndex:500,flexWrap:"wrap"}}>
+        <span style={{fontFamily:FB,fontSize:"13px",fontWeight:700,color:C.gold,whiteSpace:"nowrap"}}>{selected.size} selected</span>
+        <div style={{width:"1px",height:"20px",backgroundColor:C.border}}/>
+        <select defaultValue="" onChange={e=>{if(e.target.value){bulkAssign(e.target.value);e.target.value="";}}} style={{backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"7px 12px",color:C.sub,fontFamily:FB,fontSize:"13px",outline:"none",appearance:"none",cursor:"pointer"}}><option value="">Assign to agent…</option>{agents.map(a=><option key={a.id} value={a.id}>{a.displayName||a.email}</option>)}</select>
+        <select defaultValue="" onChange={e=>{if(e.target.value){bulkStage(e.target.value);e.target.value="";}}} style={{backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"7px 12px",color:C.sub,fontFamily:FB,fontSize:"13px",outline:"none",appearance:"none",cursor:"pointer"}}><option value="">Change stage…</option>{STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select>
+        <button onClick={()=>setDeleteTarget(new Set(selected))} style={{backgroundColor:C.redMuted,border:`1px solid ${C.red}40`,borderRadius:R.md,color:C.red,fontFamily:FB,fontSize:"13px",fontWeight:600,padding:"7px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"4px"}}><RiDeleteBinLine size={13}/>Delete</button>
+        <button onClick={()=>setSelected(new Set())} style={{background:"none",border:"none",color:C.sub,cursor:"pointer",fontFamily:FB,fontSize:"13px"}}>Clear</button>
+      </div>)}
 
-      {/* Delete Confirm Dialog */}
-      {deleteTargets && (
-        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <div style={{ ...STYLES.card, maxWidth: "360px", width: "100%", border: `1px solid ${COLORS.danger}40` }}>
-            <div style={{ fontSize: FONTS.size.xl, fontWeight: FONTS.weight.bold, color: COLORS.textPrimary, marginBottom: SPACING.sm }}>
-              Delete {deleteTargets.size} lead{deleteTargets.size > 1 ? "s" : ""}?
-            </div>
-            <div style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary, marginBottom: SPACING.xl, lineHeight: 1.6 }}>
-              This cannot be undone. All call logs, notes, and AI summaries for these leads will be permanently removed.
-            </div>
-            <div style={{ display: "flex", gap: SPACING.md }}>
-              <button onClick={() => setDeleteTargets(null)} style={{ ...STYLES.buttonSecondary, flex: 1 }}>Cancel</button>
-              <button
-                onClick={bulkDelete}
-                disabled={deleting}
-                style={{ flex: 1, backgroundColor: COLORS.danger, color: "#fff", border: "none", borderRadius: RADIUS.base, fontFamily: FONTS.family, fontSize: FONTS.size.base, fontWeight: FONTS.weight.semibold, padding: `${SPACING.sm} 0`, cursor: deleting ? "not-allowed" : "pointer", opacity: deleting ? 0.6 : 1 }}
-              >
-                {deleting ? "Deleting…" : "Delete"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Delete confirm */}
+      {deleteTarget&&(<div style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"16px"}}><div style={{backgroundColor:C.surface,border:`1px solid ${C.red}40`,borderRadius:R.xl,width:"100%",maxWidth:"360px",padding:"24px",boxShadow:SH.md}}><div style={{fontFamily:FH,fontSize:"18px",fontWeight:700,color:C.text,marginBottom:"8px"}}>Delete {deleteTarget.size} lead{deleteTarget.size>1?"s":""}?</div><div style={{fontFamily:FB,fontSize:"13px",color:C.sub,lineHeight:1.6,marginBottom:"20px"}}>This cannot be undone. All call logs, notes, and AI summaries will be permanently removed.</div><div style={{display:"flex",gap:"10px"}}><button onClick={()=>setDeleteTarget(null)} style={{flex:1,backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"14px",fontWeight:500,padding:"10px 0",cursor:"pointer"}}>Cancel</button><button onClick={bulkDelete} disabled={deleting} style={{flex:1,backgroundColor:C.red,color:"#fff",border:"none",borderRadius:R.md,fontFamily:FB,fontSize:"14px",fontWeight:700,padding:"10px 0",cursor:deleting?"not-allowed":"pointer",opacity:deleting?0.6:1}}>{deleting?"Deleting…":"Delete"}</button></div></div></div>)}
+
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
     </div>
   );
 };

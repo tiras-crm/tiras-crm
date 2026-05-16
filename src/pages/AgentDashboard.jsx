@@ -1,940 +1,472 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// TIRAS CRM — AgentDashboard
+// TIRAS CRM V2 — AgentDashboard
 // File: src/pages/AgentDashboard.jsx
+// Account: Anuradha | Theme: Obsidian Gold
 //
-// HOW TO USE:
-//   In src/pages/index.js replace:
-//     export const AgentDashboard = () => <Placeholder name="Agent Dashboard" />;
-//   with the contents of this file (everything above `export default`).
+// Drop-in: In src/pages/index.js replace:
+//   export const AgentDashboard = () => <Placeholder name="Agent Dashboard" />;
 //
-// FIRESTORE READS (all scoped to currentUser.uid + companyId):
-//   leads        — assignedTo == uid, companyId
-//   calls        — agentId == uid, companyId, createdAt >= today
-//   followups    — agentId == uid, companyId, scheduledAt <= end-of-today, status == pending
-//   calls (recent) — agentId == uid, companyId, ordered by createdAt desc, limit 5
+// FEATURES:
+//  - Priority call list (overdue + today's follow-ups) at top
+//  - 4 stat cards: Calls Today, My Leads, Follow-ups Due, Conversion Rate
+//  - My Pipeline — stage bar chart (real-time)
+//  - Recent Call Activity — last 5 calls with outcome badges + AI summary hint
+//  - Wallet gate: calling disabled banner if balance < ₹5
+//  - Full mobile responsiveness: auto-fit grid, 44px tap targets
+//  - Shimmer loading skeletons — never blank screen
+//  - All data via onSnapshot (real-time)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   collection,
   query,
   where,
-  getDocs,
+  onSnapshot,
   orderBy,
   limit,
   Timestamp,
+  doc,
 } from "firebase/firestore";
 import { db, COLLECTIONS } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
-import {
-  COLORS,
-  FONTS,
-  SPACING,
-  RADIUS,
-  SHADOWS,
-  TRANSITIONS,
-} from "../theme";
 
-// ─── Keyframe injection ───────────────────────────────────────────────────────
+// ─── V2 Design tokens — Obsidian Gold ────────────────────────────────────────
+const T = {
+  bg:"#121212", surface:"#1A1A1B", gold:"#D4AF37", accent:"#E63946",
+  text:"#F5F5F5", sub:"#9A9A9A", border:"#2A2A2B",
+  success:"#22C55E", warning:"#F59E0B", info:"#3B82F6",
+  goldBg:"rgba(212,175,55,0.10)", goldBorder:"rgba(212,175,55,0.30)",
+  dangerBg:"rgba(230,57,70,0.10)", dangerBorder:"rgba(230,57,70,0.30)",
+  successBg:"rgba(34,197,94,0.10)", warningBg:"rgba(245,158,11,0.10)",
+  infoBg:"rgba(59,130,246,0.10)",
+};
 
-const STYLE_ID = "tiras-dash-styles";
+// ─── Keyframe + responsive CSS injection ─────────────────────────────────────
+const STYLE_ID = "tiras-v2-dash";
 const injectStyles = () => {
   if (document.getElementById(STYLE_ID)) return;
   const tag = document.createElement("style");
   tag.id = STYLE_ID;
   tag.textContent = `
-    @keyframes tiras-fade-up {
-      from { opacity: 0; transform: translateY(12px); }
-      to   { opacity: 1; transform: translateY(0); }
+    @keyframes v2fu  { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes v2spin{ to{transform:rotate(360deg)} }
+    @keyframes v2shim{
+      0%  {background-position:-500px 0}
+      100%{background-position: 500px 0}
     }
-    @keyframes tiras-bar-grow {
-      from { width: 0%; }
+    @keyframes v2cnt { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes v2pls { 0%,100%{opacity:1} 50%{opacity:.3} }
+    @keyframes v2slr { from{opacity:0;transform:translateX(10px)} to{opacity:1;transform:translateX(0)} }
+    .v2card:hover { border-color:rgba(212,175,55,.35)!important; box-shadow:0 4px 24px rgba(212,175,55,.07)!important; transform:translateY(-2px); transition:all .22s ease!important; }
+    .v2pbtn:hover { background:#e4c350!important; box-shadow:0 6px 20px rgba(212,175,55,.40)!important; transform:translateY(-1px); }
+    .v2row:hover  { background:rgba(212,175,55,.04)!important; }
+    .v2shim { background:linear-gradient(90deg,#1A1A1B 25%,rgba(255,255,255,.05) 50%,#1A1A1B 75%); background-size:500px 100%; animation:v2shim 1.4s ease infinite; border-radius:8px; }
+    ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-track{background:#121212} ::-webkit-scrollbar-thumb{background:#2A2A2B;border-radius:4px}
+    @media(max-width:640px){
+      .v2grid4{grid-template-columns:repeat(2,1fr)!important}
+      .v2grid2{grid-template-columns:1fr!important}
+      .v2donly{display:none!important}
+      .v2pad  {padding:16px!important}
     }
-    @keyframes tiras-spin {
-      to { transform: rotate(360deg); }
-    }
-    @keyframes tiras-pulse-dot {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.35; }
-    }
+    @media(min-width:641px){.v2monly{display:none!important}}
   `;
   document.head.appendChild(tag);
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Start of today as a JS Date */
-const todayStart = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-/** End of today as a JS Date */
-const todayEnd = () => {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
-  return d;
-};
-
-/** Start of current calendar month */
-const monthStart = () => {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-/** Human-friendly relative time label */
+const todayStart = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
+const todayEnd   = () => { const d=new Date(); d.setHours(23,59,59,999); return d; };
+const monthStart = () => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; };
 const timeAgo = (ts) => {
   if (!ts) return "—";
-  const date = ts.toDate ? ts.toDate() : new Date(ts);
-  const diff = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diff < 60)  return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  const d=ts.toDate?ts.toDate():new Date(ts), s=Math.floor((Date.now()-d.getTime())/1000);
+  if(s<60) return `${s}s ago`; if(s<3600) return `${Math.floor(s/60)}m ago`;
+  if(s<86400) return `${Math.floor(s/3600)}h ago`;
+  return d.toLocaleDateString("en-IN",{day:"numeric",month:"short"});
 };
-
-/** Format seconds as m:ss */
-const formatDuration = (secs) => {
-  if (!secs) return "0:00";
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
+const fmtTime = (ts) => {
+  if(!ts) return "";
+  const d=ts.toDate?ts.toDate():new Date(ts);
+  return d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});
 };
+const fmtDur  = (s) => s ? `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}` : "0:00";
+const greeting = () => { const h=new Date().getHours(); return h<12?"Good morning":h<17?"Good afternoon":"Good evening"; };
 
-// ─── Outcome config (colour + label) ─────────────────────────────────────────
-
-const OUTCOME_CONFIG = {
-  "Interested":     { color: COLORS.success,       bg: `${COLORS.success}18`,   label: "Interested" },
-  "Not Interested": { color: COLORS.danger,        bg: `${COLORS.danger}18`,    label: "Not Interested" },
-  "Call Back":      { color: COLORS.accent,        bg: `${COLORS.accent}18`,    label: "Call Back" },
-  "No Answer":      { color: COLORS.textMuted,     bg: `${COLORS.surfaceActive}`,label: "No Answer" },
-  "Wrong Number":   { color: COLORS.textMuted,     bg: `${COLORS.surfaceActive}`,label: "Wrong Number" },
-  "Busy":           { color: COLORS.warning,       bg: `${COLORS.warning}18`,   label: "Busy" },
-  "Voicemail":      { color: COLORS.info,          bg: `${COLORS.info}18`,      label: "Voicemail" },
+const OUTCOME_CFG = {
+  "Interested":    {color:T.success, bg:T.successBg},
+  "Not Interested":{color:T.accent,  bg:T.dangerBg },
+  "Call Back":     {color:T.gold,    bg:T.goldBg   },
+  "No Answer":     {color:T.sub,     bg:"rgba(154,154,154,.08)"},
+  "Wrong Number":  {color:T.sub,     bg:"rgba(154,154,154,.08)"},
+  "Busy":          {color:T.warning, bg:T.warningBg},
+  "Voicemail":     {color:T.info,    bg:T.infoBg   },
 };
-
-// ─── Pipeline stage order ─────────────────────────────────────────────────────
-
-const STAGE_ORDER = [
-  "New",
-  "Contacted",
-  "Interested",
-  "Follow-up",
-  "Negotiation",
-  "Closed Won",
-  "Closed Lost",
-];
-
-const STAGE_COLORS = {
-  "New":          COLORS.textMuted,
-  "Contacted":    COLORS.info,
-  "Interested":   COLORS.accent,
-  "Follow-up":    COLORS.warning,
-  "Negotiation":  COLORS.primary,
-  "Closed Won":   COLORS.success,
-  "Closed Lost":  COLORS.danger,
+const STAGE_CLR = {
+  "New":T.sub,"Contacted":T.info,"Interested":T.gold,"Follow-up":T.warning,
+  "Negotiation":T.gold,"Closed Won":T.success,"Closed Lost":T.accent
 };
+const STAGE_ORDER = ["New","Contacted","Interested","Follow-up","Negotiation","Closed Won","Closed Lost"];
 
-// ─── Style objects ────────────────────────────────────────────────────────────
-
-const S = {
-  page: {
-    minHeight: "100%",
-    backgroundColor: COLORS.background,
-    padding: SPACING["2xl"],
-    fontFamily: FONTS.family,
-  },
-
-  // Page header
-  pageHeader: {
-    marginBottom: SPACING["2xl"],
-    animation: "tiras-fade-up 0.3s ease both",
-  },
-  pageTitle: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size["3xl"],
-    fontWeight: FONTS.weight.bold,
-    letterSpacing: "-0.01em",
-    marginBottom: SPACING.xs,
-  },
-  pageSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: FONTS.size.base,
-  },
-
-  // Stat card grid
-  statGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-    gap: SPACING.base,
-    marginBottom: SPACING["2xl"],
-  },
-
-  statCard: {
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.xl,
-    boxShadow: SHADOWS.sm,
-    transition: TRANSITIONS.base,
-    cursor: "default",
-    position: "relative",
-    overflow: "hidden",
-  },
-
-  statCardAccentBar: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: "2px",
-  },
-
-  statLabel: {
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.medium,
-    letterSpacing: "0.04em",
-    textTransform: "uppercase",
-    marginBottom: SPACING.sm,
-  },
-
-  statValue: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size["5xl"],
-    fontWeight: FONTS.weight.bold,
-    letterSpacing: "-0.02em",
-    lineHeight: 1,
-    marginBottom: SPACING.xs,
-  },
-
-  statMeta: {
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.sm,
-  },
-
-  statIcon: {
-    position: "absolute",
-    bottom: SPACING.base,
-    right: SPACING.base,
-    opacity: 0.07,
-  },
-
-  // Two-column body layout
-  bodyGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: SPACING.base,
-  },
-
-  // Card base
-  card: {
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.lg,
-    boxShadow: SHADOWS.sm,
-    overflow: "hidden",
-  },
-
-  cardHeader: {
-    padding: `${SPACING.base} ${SPACING.xl}`,
-    borderBottom: `1px solid ${COLORS.border}`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  cardTitle: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.md,
-    fontWeight: FONTS.weight.semibold,
-  },
-
-  cardBadge: {
-    backgroundColor: COLORS.primaryMuted,
-    color: COLORS.primary,
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.semibold,
-    padding: `2px ${SPACING.sm}`,
-    borderRadius: RADIUS.full,
-  },
-
-  cardBody: {
-    padding: SPACING.xl,
-  },
-
-  // Stage rows
-  stageRow: {
-    marginBottom: SPACING.md,
-  },
-
-  stageLabel: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: SPACING.xs,
-  },
-
-  stageName: {
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.medium,
-    color: COLORS.textSecondary,
-  },
-
-  stageCount: {
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.bold,
-    color: COLORS.textPrimary,
-  },
-
-  stageTrack: {
-    height: "5px",
-    backgroundColor: COLORS.surfaceActive,
-    borderRadius: RADIUS.full,
-    overflow: "hidden",
-  },
-
-  // Activity list
-  activityList: {
-    display: "flex",
-    flexDirection: "column",
-  },
-
-  activityItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: SPACING.md,
-    padding: `${SPACING.md} ${SPACING.xl}`,
-    borderBottom: `1px solid ${COLORS.border}`,
-    transition: TRANSITIONS.fast,
-  },
-
-  activityDot: {
-    width: "8px",
-    height: "8px",
-    borderRadius: "50%",
-    flexShrink: 0,
-  },
-
-  activityMain: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  activityLeadName: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.base,
-    fontWeight: FONTS.weight.medium,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  activityMeta: {
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.sm,
-    marginTop: "2px",
-  },
-
-  activityRight: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    gap: "3px",
-    flexShrink: 0,
-  },
-
-  outcomeBadge: {
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.semibold,
-    padding: `2px ${SPACING.sm}`,
-    borderRadius: RADIUS.full,
-    whiteSpace: "nowrap",
-  },
-
-  activityTime: {
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.xs,
-  },
-
-  // Follow-up items
-  followupItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: SPACING.md,
-    padding: `${SPACING.md} ${SPACING.xl}`,
-    borderBottom: `1px solid ${COLORS.border}`,
-  },
-
-  followupDot: {
-    width: "8px",
-    height: "8px",
-    borderRadius: "50%",
-    backgroundColor: COLORS.accent,
-    flexShrink: 0,
-    animation: "tiras-pulse-dot 2s ease infinite",
-  },
-
-  followupLeadName: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.base,
-    fontWeight: FONTS.weight.medium,
-    flex: 1,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  followupTime: {
-    color: COLORS.accent,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.semibold,
-    flexShrink: 0,
-  },
-
-  // Loading / empty states
-  loadingWrap: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: `${SPACING["3xl"]} ${SPACING.xl}`,
-    gap: SPACING.sm,
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.sm,
-  },
-
-  spinner: {
-    width: "16px",
-    height: "16px",
-    borderRadius: "50%",
-    border: `2px solid ${COLORS.border}`,
-    borderTopColor: COLORS.primary,
-    animation: "tiras-spin 0.7s linear infinite",
-    flexShrink: 0,
-  },
-
-  emptyState: {
-    textAlign: "center",
-    padding: `${SPACING["2xl"]} ${SPACING.xl}`,
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.sm,
-  },
-
-  emptyIcon: {
-    fontSize: "28px",
-    marginBottom: SPACING.sm,
-    opacity: 0.4,
-  },
-};
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-/** Stat card with top accent bar and big number */
-const StatCard = ({ label, value, meta, accentColor, icon, delay = 0 }) => {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <div
-      style={{
-        ...S.statCard,
-        animation: `tiras-fade-up 0.35s ease ${delay}ms both`,
-        ...(hovered ? { borderColor: accentColor + "60", boxShadow: `0 4px 16px ${accentColor}18` } : {}),
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div style={{ ...S.statCardAccentBar, backgroundColor: accentColor }} />
-      <div style={S.statLabel}>{label}</div>
-      <div style={{ ...S.statValue, color: accentColor }}>{value}</div>
-      {meta && <div style={S.statMeta}>{meta}</div>}
-      <div style={S.statIcon}>{icon}</div>
-    </div>
-  );
-};
-
-/** Section card wrapper */
-const SectionCard = ({ title, badge, children, style }) => (
-  <div style={{ ...S.card, ...style }}>
-    <div style={S.cardHeader}>
-      <span style={S.cardTitle}>{title}</span>
-      {badge != null && (
-        <span style={S.cardBadge}>{badge}</span>
-      )}
-    </div>
-    {children}
+// ─── Skeleton helpers ─────────────────────────────────────────────────────────
+const Shim = ({h,w="100%",style={}}) => (
+  <div className="v2shim" style={{height:h,width:w,borderRadius:"8px",...style}}/>
+);
+const StatSkeleton = () => (
+  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"12px",marginBottom:"24px"}} className="v2grid4">
+    {[0,1,2,3].map(i=>(
+      <div key={i} style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",padding:"20px",animationDelay:`${i*50}ms`}}>
+        <Shim h="11px" w="60%"/><div style={{height:"8px"}}/><Shim h="36px" w="50%"/><div style={{height:"6px"}}/><Shim h="11px" w="80%"/>
+      </div>
+    ))}
+  </div>
+);
+const RowSkeleton = ({rows=3}) => (
+  <div>
+    {Array.from({length:rows}).map((_,i)=>(
+      <div key={i} style={{display:"flex",alignItems:"center",gap:"12px",padding:"12px 20px",borderBottom:`1px solid ${T.border}`}}>
+        <Shim h="8px" w="8px" style={{borderRadius:"50%"}}/>
+        <div style={{flex:1}}><Shim h="13px" w="55%"/><div style={{height:"5px"}}/><Shim h="10px" w="35%"/></div>
+        <Shim h="22px" w="60px"/>
+      </div>
+    ))}
   </div>
 );
 
-/** Loading placeholder for a card body */
-const LoadingRows = () => (
-  <div style={S.loadingWrap}>
-    <div style={S.spinner} />
-    <span>Loading…</span>
-  </div>
-);
-
-/** SVG icons (monochrome, sized inline) */
-const PhoneIcon = ({ size = 40, color = COLORS.primary }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+// ─── Icon SVGs ────────────────────────────────────────────────────────────────
+const PhoneIco = ({sz=14}) => (
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.39 2 2 0 0 1 3.6 1.21h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.85a16 16 0 0 0 6.29 6.29l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
   </svg>
 );
-
-const LeadsIcon = ({ size = 40, color = COLORS.accent }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-    <circle cx="9" cy="7" r="4"/>
-    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+const PipeIco = ({sz=14}) => (
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
   </svg>
 );
-
-const CalendarIcon = ({ size = 40, color = COLORS.warning }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-    <line x1="16" y1="2" x2="16" y2="6"/>
-    <line x1="8" y1="2" x2="8" y2="6"/>
-    <line x1="3" y1="10" x2="21" y2="10"/>
-  </svg>
-);
-
-const TrendIcon = ({ size = 40, color = COLORS.success }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
-    <polyline points="16 7 22 7 22 13"/>
+const ClkIco = ({sz=14}) => (
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
   </svg>
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AgentDashboard Component
+// AgentDashboard
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const AgentDashboard = () => {
+  const navigate = useNavigate();
   const { currentUser, companyId, userProfile } = useAuth();
+  const unsubRefs = useRef([]);
 
-  // ─── State ──────────────────────────────────────────────────────────────────
-  const [callsToday,    setCallsToday]    = useState(null);   // number
-  const [talkTimeToday, setTalkTimeToday] = useState(0);      // total seconds
-  const [leadsByStage,  setLeadsByStage]  = useState(null);   // { stage: count }
-  const [totalLeads,    setTotalLeads]    = useState(0);
-  const [followupsDue,  setFollowupsDue]  = useState(null);   // array of followup docs
-  const [convRate,      setConvRate]      = useState(null);   // percentage string
-  const [recentCalls,   setRecentCalls]   = useState(null);   // array of call+lead docs
-  const [loading,       setLoading]       = useState(true);
-
-  // ─── Fetch all dashboard data ────────────────────────────────────────────────
-
-  const fetchDashboard = useCallback(async () => {
-    if (!currentUser || !companyId) return;
-    setLoading(true);
-
-    try {
-      await Promise.all([
-        fetchCallsToday(),
-        fetchLeads(),
-        fetchFollowupsDue(),
-        fetchRecentCalls(),
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentUser, companyId]); // eslint-disable-line
+  const [callsToday,     setCallsToday]     = useState(null);
+  const [talkTime,       setTalkTime]       = useState(0);
+  const [leadsByStage,   setLeadsByStage]   = useState(null);
+  const [totalLeads,     setTotalLeads]     = useState(0);
+  const [followupsDue,   setFollowupsDue]   = useState(null);
+  const [recentCalls,    setRecentCalls]    = useState(null);
+  const [convRate,       setConvRate]       = useState(null);
+  const [callingEnabled, setCallingEnabled] = useState(true);
 
   useEffect(() => {
     injectStyles();
-    fetchDashboard();
-  }, [fetchDashboard]);
+    if (!currentUser || !companyId) return;
+    const unsubs = setupListeners();
+    return () => unsubs.forEach(u => u?.());
+  }, [currentUser, companyId]); // eslint-disable-line
 
-  // ─── Fetch: calls made today ─────────────────────────────────────────────────
-
-  const fetchCallsToday = async () => {
-    const q = query(
-      collection(db, COLLECTIONS.CALLS),
-      where("agentId",   "==", currentUser.uid),
-      where("companyId", "==", companyId),
-      where("createdAt", ">=", Timestamp.fromDate(todayStart())),
-      where("createdAt", "<=", Timestamp.fromDate(todayEnd()))
-    );
-    const snap = await getDocs(q);
-    let totalSecs = 0;
-    snap.docs.forEach((d) => { totalSecs += d.data().duration || 0; });
-    setCallsToday(snap.size);
-    setTalkTimeToday(totalSecs);
-  };
-
-  // ─── Fetch: all my leads + conversion rate ───────────────────────────────────
-
-  const fetchLeads = async () => {
-    const q = query(
-      collection(db, COLLECTIONS.LEADS),
-      where("assignedTo", "==", currentUser.uid),
-      where("companyId",  "==", companyId)
-    );
-    const snap = await getDocs(q);
-
-    // Count by stage
-    const stages = {};
-    let closedWon = 0;
-    let monthClosed = 0;
-
-    snap.docs.forEach((d) => {
-      const data = d.data();
-      const stage = data.stage || "New";
-      stages[stage] = (stages[stage] || 0) + 1;
-
-      // Conversion rate: Closed Won / all leads assigned this month
-      const createdAt = data.createdAt?.toDate?.();
-      if (createdAt && createdAt >= monthStart()) {
-        monthClosed++;
-        if (stage === "Closed Won") closedWon++;
-      }
+  const setupListeners = () => {
+    // 1. Company wallet gate (agent sees disabled state only, never balance)
+    const u1 = onSnapshot(doc(db, COLLECTIONS.COMPANIES, companyId), snap => {
+      if (!snap.exists()) return;
+      const d = snap.data();
+      const bal    = d?.wallet?.balance ?? 0;
+      const status = d?.subscriptionStatus ?? "trial";
+      setCallingEnabled((status === "active" || status === "trial") && bal >= 5);
     });
 
-    setLeadsByStage(stages);
-    setTotalLeads(snap.size);
+    // 2. All my leads (real-time)
+    const u2 = onSnapshot(
+      query(collection(db,COLLECTIONS.LEADS),
+        where("assignedTo","==",currentUser.uid),
+        where("companyId","==",companyId)
+      ),
+      snap => {
+        const docs = snap.docs.map(d=>({id:d.id,...d.data()}));
+        const stages = {};
+        let won=0, monthTotal=0;
+        docs.forEach(l => {
+          const st = l.stage||"New";
+          stages[st] = (stages[st]||0)+1;
+          const ca = l.createdAt?.toDate?.();
+          if (ca && ca >= monthStart()) { monthTotal++; if(st==="Closed Won") won++; }
+        });
+        setLeadsByStage(stages);
+        setTotalLeads(docs.length);
+        setConvRate(monthTotal>0 ? Math.round((won/monthTotal)*100) : 0);
+      }
+    );
 
-    const rate = monthClosed > 0
-      ? Math.round((closedWon / monthClosed) * 100)
-      : 0;
-    setConvRate(rate);
+    // 3. Calls today (real-time)
+    const u3 = onSnapshot(
+      query(collection(db,COLLECTIONS.CALLS),
+        where("agentId","==",currentUser.uid),
+        where("companyId","==",companyId),
+        where("createdAt",">=",Timestamp.fromDate(todayStart())),
+        where("createdAt","<=",Timestamp.fromDate(todayEnd()))
+      ),
+      snap => {
+        let secs=0; snap.docs.forEach(d=>{ secs+=d.data().duration||0; });
+        setCallsToday(snap.size); setTalkTime(secs);
+      }
+    );
+
+    // 4. Follow-ups due today (real-time)
+    const u4 = onSnapshot(
+      query(collection(db,COLLECTIONS.FOLLOW_UPS),
+        where("agentId","==",currentUser.uid),
+        where("companyId","==",companyId),
+        where("status","==","pending"),
+        where("scheduledAt","<=",Timestamp.fromDate(todayEnd())),
+        orderBy("scheduledAt","asc")
+      ),
+      snap => setFollowupsDue(snap.docs.map(d=>({id:d.id,...d.data()})))
+    );
+
+    // 5. Recent calls (last 5, real-time)
+    const u5 = onSnapshot(
+      query(collection(db,COLLECTIONS.CALLS),
+        where("agentId","==",currentUser.uid),
+        where("companyId","==",companyId),
+        orderBy("createdAt","desc"), limit(5)
+      ),
+      snap => setRecentCalls(snap.docs.map(d=>({id:d.id,...d.data()})))
+    );
+
+    return [u1,u2,u3,u4,u5];
   };
 
-  // ─── Fetch: follow-ups due today ──────────────────────────────────────────────
+  // Derived
+  const displayName  = userProfile?.displayName ?? currentUser?.email?.split("@")[0] ?? "Agent";
+  const talkTimeStr  = talkTime>=60 ? `${Math.floor(talkTime/60)}m talk time` : `${talkTime}s talk time`;
+  const maxStage     = leadsByStage ? Math.max(...Object.values(leadsByStage),1) : 1;
+  const overdueItems = followupsDue?.filter(f=>f.scheduledAt?.toDate?.()<new Date()) ?? [];
+  const priorityList = [...overdueItems, ...(followupsDue?.filter(f=>f.scheduledAt?.toDate?.()>=new Date())??[])];
 
-  const fetchFollowupsDue = async () => {
-    const q = query(
-      collection(db, COLLECTIONS.FOLLOW_UPS),
-      where("agentId",     "==", currentUser.uid),
-      where("companyId",   "==", companyId),
-      where("status",      "==", "pending"),
-      where("scheduledAt", "<=", Timestamp.fromDate(todayEnd())),
-      orderBy("scheduledAt", "asc")
-    );
-    const snap = await getDocs(q);
-    setFollowupsDue(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-  };
-
-  // ─── Fetch: 5 most recent calls with lead name ───────────────────────────────
-
-  const fetchRecentCalls = async () => {
-    const q = query(
-      collection(db, COLLECTIONS.CALLS),
-      where("agentId",   "==", currentUser.uid),
-      where("companyId", "==", companyId),
-      orderBy("createdAt", "desc"),
-      limit(5)
-    );
-    const snap = await getDocs(q);
-    const calls = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    // Batch-resolve lead names from the leadId on each call
-    const withNames = await Promise.all(
-      calls.map(async (call) => {
-        if (!call.leadId) return { ...call, leadName: "Unknown Lead" };
-        try {
-          const leadSnap = await getDocs(
-            query(
-              collection(db, COLLECTIONS.LEADS),
-              where("__name__", "==", call.leadId)
-            )
-          );
-          // getDocs by __name__ filter is unreliable across SDKs —
-          // safe fallback: use the leadName stored on the call doc if present
-          const leadDoc = leadSnap.docs[0];
-          return {
-            ...call,
-            leadName: leadDoc?.data()?.name ?? call.leadName ?? "Unknown Lead",
-          };
-        } catch {
-          return { ...call, leadName: call.leadName ?? "Unknown Lead" };
-        }
-      })
-    );
-    setRecentCalls(withNames);
-  };
-
-  // ─── Derived values ───────────────────────────────────────────────────────────
-
-  const displayName = userProfile?.displayName ?? currentUser?.email?.split("@")[0] ?? "Agent";
-  const todayLabel  = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
-  const talkTimeFmt = talkTimeToday >= 60
-    ? `${Math.floor(talkTimeToday / 60)}m talk time`
-    : `${talkTimeToday}s talk time`;
-
-  // For stage bar chart: max count to calculate percentages
-  const maxStageCount = leadsByStage
-    ? Math.max(...Object.values(leadsByStage), 1)
-    : 1;
-
-  // ─── Render ───────────────────────────────────────────────────────────────────
+  const STATS = [
+    {label:"Calls Today",   value:callsToday??0,         meta:talkTimeStr,                                     color:T.gold,    delay:0  },
+    {label:"My Leads",      value:totalLeads,             meta:`${Object.keys(leadsByStage??{}).length} stages`, color:T.info,    delay:60 },
+    {label:"Follow-ups Due",value:followupsDue?.length??0,meta:overdueItems.length>0?`${overdueItems.length} overdue`:"All on time", color:overdueItems.length>0?T.accent:T.success, delay:120},
+    {label:"Conversion",    value:`${convRate??0}%`,      meta:"Closed Won this month",                          color:T.success, delay:180},
+  ];
 
   return (
-    <div style={S.page}>
+    <div style={{minHeight:"100%",backgroundColor:T.bg,padding:"28px",fontFamily:"'DM Sans',sans-serif",color:T.text}} className="v2pad">
 
-      {/* Page header */}
-      <div style={S.pageHeader}>
-        <div style={S.pageTitle}>
-          Good {greeting()},{" "}
-          <span style={{ color: COLORS.primary }}>{displayName}</span>
+      {/* Header */}
+      <div style={{marginBottom:"28px",animation:"v2fu 0.3s ease both"}}>
+        <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:"28px",fontWeight:700,color:T.text,letterSpacing:"-0.01em",marginBottom:"4px"}}>
+          {greeting()}, <span style={{color:T.gold}}>{displayName}</span>
+        </h1>
+        <p style={{color:T.sub,fontSize:"14px"}}>
+          {new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+        </p>
+      </div>
+
+      {/* Calling disabled banner */}
+      {!callingEnabled && (
+        <div style={{display:"flex",alignItems:"center",gap:"12px",backgroundColor:T.dangerBg,border:`1px solid ${T.dangerBorder}`,borderRadius:"10px",padding:"12px 16px",marginBottom:"24px",animation:"v2fu 0.3s ease both"}}>
+          <span style={{fontSize:"18px"}}>⚠</span>
+          <span style={{color:T.accent,fontSize:"13px",fontWeight:600}}>
+            Calling is currently disabled. Contact your admin to recharge the wallet.
+          </span>
         </div>
-        <div style={S.pageSubtitle}>{todayLabel}</div>
-      </div>
+      )}
 
-      {/* ── Stat cards ───────────────────────────────────────────────────────── */}
-      <div style={S.statGrid}>
-
-        <StatCard
-          label="Calls Today"
-          value={callsToday ?? "—"}
-          meta={callsToday !== null ? talkTimeFmt : "Loading…"}
-          accentColor={COLORS.primary}
-          icon={<PhoneIcon />}
-          delay={0}
-        />
-
-        <StatCard
-          label="My Leads"
-          value={leadsByStage !== null ? totalLeads : "—"}
-          meta={leadsByStage !== null ? `${Object.keys(leadsByStage).length} active stages` : "Loading…"}
-          accentColor={COLORS.accent}
-          icon={<LeadsIcon />}
-          delay={60}
-        />
-
-        <StatCard
-          label="Follow-ups Due"
-          value={followupsDue !== null ? followupsDue.length : "—"}
-          meta={followupsDue !== null
-            ? (followupsDue.length === 0 ? "All clear today" : "Due today")
-            : "Loading…"}
-          accentColor={followupsDue?.length > 0 ? COLORS.warning : COLORS.success}
-          icon={<CalendarIcon />}
-          delay={120}
-        />
-
-        <StatCard
-          label="Conversion Rate"
-          value={convRate !== null ? `${convRate}%` : "—"}
-          meta="Closed Won / total this month"
-          accentColor={COLORS.success}
-          icon={<TrendIcon />}
-          delay={180}
-        />
-
-      </div>
-
-      {/* ── Body: two columns ─────────────────────────────────────────────────── */}
-      <div style={S.bodyGrid}>
-
-        {/* LEFT — Leads by Stage */}
-        <SectionCard
-          title="Leads by Stage"
-          badge={leadsByStage !== null ? totalLeads : null}
-        >
-          {leadsByStage === null ? (
-            <LoadingRows />
-          ) : totalLeads === 0 ? (
-            <div style={S.emptyState}>
-              <div style={S.emptyIcon}>📋</div>
-              <div>No leads assigned yet</div>
+      {/* Stat cards */}
+      {callsToday===null ? <StatSkeleton/> : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"12px",marginBottom:"24px"}} className="v2grid4">
+          {STATS.map(({label,value,meta,color,delay})=>(
+            <div key={label} className="v2card" style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",padding:"20px",position:"relative",overflow:"hidden",transition:"all .22s ease",animation:`v2fu .35s ease ${delay}ms both`}}>
+              <div style={{position:"absolute",top:0,left:0,right:0,height:"2px",backgroundColor:color,borderRadius:"12px 12px 0 0"}}/>
+              <div style={{color:T.sub,fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"10px"}}>{label}</div>
+              <div style={{fontSize:"36px",fontWeight:700,lineHeight:1,color,marginBottom:"4px",animation:"v2cnt .4s ease both",fontVariantNumeric:"tabular-nums"}}>{value}</div>
+              <div style={{color:T.sub,fontSize:"12px"}}>{meta}</div>
             </div>
-          ) : (
-            <div style={S.cardBody}>
-              {STAGE_ORDER.map((stage) => {
-                const count = leadsByStage[stage] || 0;
-                const pct   = Math.round((count / maxStageCount) * 100);
-                const color = STAGE_COLORS[stage] || COLORS.textMuted;
-                return (
-                  <div key={stage} style={S.stageRow}>
-                    <div style={S.stageLabel}>
-                      <span style={{ ...S.stageName, color }}>{stage}</span>
-                      <span style={S.stageCount}>{count}</span>
-                    </div>
-                    <div style={S.stageTrack}>
-                      <div
-                        style={{
-                          height: "100%",
-                          width: `${pct}%`,
-                          backgroundColor: color,
-                          borderRadius: RADIUS.full,
-                          transition: "width 0.6s cubic-bezier(0.4, 0, 0.2, 1)",
-                          minWidth: count > 0 ? "6px" : "0",
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </SectionCard>
+          ))}
+        </div>
+      )}
 
-        {/* RIGHT — Follow-ups due today */}
-        <SectionCard
-          title="Follow-ups Due Today"
-          badge={followupsDue !== null ? followupsDue.length : null}
-        >
-          {followupsDue === null ? (
-            <LoadingRows />
-          ) : followupsDue.length === 0 ? (
-            <div style={S.emptyState}>
-              <div style={S.emptyIcon}>✅</div>
+      {/* Two-col grid: Priority calls + Pipeline */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"16px",marginBottom:"16px"}} className="v2grid2">
+
+        {/* Priority Call List */}
+        <div style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",overflow:"hidden",animation:"v2fu .35s ease 80ms both"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:`1px solid ${T.border}`}}>
+            <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:"14px",fontWeight:700,color:T.text,display:"flex",alignItems:"center",gap:"8px"}}>
+              <PhoneIco/> Priority Calls
+            </span>
+            {overdueItems.length>0 && (
+              <span style={{fontSize:"11px",fontWeight:700,padding:"2px 8px",borderRadius:"20px",backgroundColor:T.dangerBg,color:T.accent,border:`1px solid ${T.dangerBorder}`}}>
+                {overdueItems.length} overdue
+              </span>
+            )}
+            {overdueItems.length===0 && priorityList.length>0 && (
+              <span style={{fontSize:"11px",fontWeight:700,padding:"2px 8px",borderRadius:"20px",backgroundColor:T.goldBg,color:T.gold,border:`1px solid ${T.goldBorder}`}}>
+                {priorityList.length} due
+              </span>
+            )}
+          </div>
+
+          {followupsDue===null ? <RowSkeleton/> :
+           priorityList.length===0 ? (
+            <div style={{textAlign:"center",padding:"36px 20px",color:T.sub,fontSize:"13px"}}>
+              <div style={{fontSize:"28px",marginBottom:"10px",opacity:.5}}>✅</div>
+              <div style={{color:T.text,fontSize:"14px",fontWeight:600,marginBottom:"4px"}}>All clear</div>
               <div>No follow-ups due today</div>
             </div>
           ) : (
-            <div>
-              {followupsDue.map((fu, idx) => {
-                const scheduledDate = fu.scheduledAt?.toDate?.();
-                const timeStr = scheduledDate
-                  ? scheduledDate.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
-                  : "—";
-                const isOverdue = scheduledDate && scheduledDate < new Date();
+            <>
+              {priorityList.slice(0,6).map((fu,idx)=>{
+                const isOD  = fu.scheduledAt?.toDate?.()<new Date();
+                const dotC  = isOD?T.accent:T.gold;
                 return (
-                  <div
-                    key={fu.id}
-                    style={{
-                      ...S.followupItem,
-                      ...(idx === followupsDue.length - 1
-                        ? { borderBottom: "none" }
-                        : {}),
-                    }}
+                  <div key={fu.id} className="v2row"
+                    style={{display:"flex",alignItems:"center",gap:"12px",padding:"12px 20px",borderBottom:idx===Math.min(priorityList.length,6)-1?"none":`1px solid ${T.border}`,cursor:"pointer",minHeight:"44px",transition:"background .15s"}}
+                    onClick={()=>fu.leadId&&navigate(`/agent/lead/${fu.leadId}`)}
                   >
-                    <div
-                      style={{
-                        ...S.followupDot,
-                        backgroundColor: isOverdue ? COLORS.danger : COLORS.accent,
-                      }}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={S.followupLeadName}>
-                        {fu.leadName ?? "Lead"}
-                      </div>
-                      {fu.note && (
-                        <div
-                          style={{
-                            color: COLORS.textMuted,
-                            fontSize: FONTS.size.sm,
-                            marginTop: "2px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {fu.note}
-                        </div>
-                      )}
+                    <div style={{width:"8px",height:"8px",borderRadius:"50%",backgroundColor:dotC,flexShrink:0}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:"14px",fontWeight:600,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fu.leadName??"—"}</div>
+                      {fu.note&&<div style={{fontSize:"12px",color:T.sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fu.note}</div>}
                     </div>
-                    <div
+                    <span style={{fontSize:"12px",fontWeight:700,color:isOD?T.accent:T.gold,flexShrink:0}}>{isOD?"Overdue":fmtTime(fu.scheduledAt)}</span>
+                    <button
+                      disabled={!callingEnabled}
+                      className={callingEnabled?"v2pbtn":""}
                       style={{
-                        ...S.followupTime,
-                        color: isOverdue ? COLORS.danger : COLORS.accent,
+                        backgroundColor:callingEnabled?T.gold:"rgba(212,175,55,.2)",
+                        color:callingEnabled?"#000":T.sub,
+                        border:"none",borderRadius:"7px",fontFamily:"'DM Sans',sans-serif",
+                        fontSize:"12px",fontWeight:700,padding:"6px 12px",
+                        cursor:callingEnabled?"pointer":"not-allowed",
+                        flexShrink:0,minHeight:"44px",display:"flex",alignItems:"center",gap:"5px",
+                        transition:"all .15s",
+                      }}
+                      onClick={e=>{
+                        e.stopPropagation();
+                        if(!callingEnabled) return;
+                        navigate("/agent/call",{state:{lead:{id:fu.leadId,name:fu.leadName,phone:fu.leadPhone}}});
                       }}
                     >
-                      {isOverdue ? "Overdue" : timeStr}
+                      <PhoneIco sz={12}/>Call
+                    </button>
+                  </div>
+                );
+              })}
+              {priorityList.length>6&&(
+                <div style={{padding:"10px 20px",borderTop:`1px solid ${T.border}`}}>
+                  <button style={{background:"none",border:"none",color:T.gold,fontFamily:"'DM Sans',sans-serif",fontSize:"12px",fontWeight:600,cursor:"pointer",padding:0}} onClick={()=>navigate("/agent/followups")}>
+                    View all {priorityList.length} →
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Pipeline stage bars */}
+        <div style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",overflow:"hidden",animation:"v2fu .35s ease 120ms both"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:`1px solid ${T.border}`}}>
+            <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:"14px",fontWeight:700,color:T.text,display:"flex",alignItems:"center",gap:"8px"}}>
+              <PipeIco/> My Pipeline
+            </span>
+            {leadsByStage!==null&&(
+              <span style={{fontSize:"11px",fontWeight:700,padding:"2px 8px",borderRadius:"20px",backgroundColor:T.goldBg,color:T.gold,border:`1px solid ${T.goldBorder}`}}>
+                {totalLeads} total
+              </span>
+            )}
+          </div>
+
+          {leadsByStage===null ? <RowSkeleton rows={5}/> :
+           totalLeads===0 ? (
+            <div style={{textAlign:"center",padding:"36px 20px",color:T.sub,fontSize:"13px"}}>
+              <div style={{fontSize:"28px",marginBottom:"10px",opacity:.5}}>📋</div>
+              <div style={{color:T.text,fontSize:"14px",fontWeight:600,marginBottom:"4px"}}>No leads assigned</div>
+              <button className="v2pbtn" style={{marginTop:"12px",backgroundColor:T.gold,color:"#000",border:"none",borderRadius:"8px",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:700,padding:"8px 16px",cursor:"pointer",minHeight:"44px",transition:"all .15s"}} onClick={()=>navigate("/agent/add-lead")}>
+                Add Your First Lead
+              </button>
+            </div>
+          ) : (
+            <div style={{padding:"10px 0"}}>
+              {STAGE_ORDER.filter(s=>(leadsByStage[s]||0)>0).map(stage=>{
+                const count  = leadsByStage[stage]||0;
+                const color  = STAGE_CLR[stage]||T.sub;
+                const pct    = Math.round((count/maxStage)*100);
+                return (
+                  <div key={stage} style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 20px"}}>
+                    <div style={{fontSize:"13px",color,width:"100px",flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{stage}</div>
+                    <div style={{flex:1,height:"5px",backgroundColor:"rgba(255,255,255,.05)",borderRadius:"10px",overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${pct}%`,backgroundColor:color,borderRadius:"10px",transition:"width .7s cubic-bezier(.4,0,.2,1)",minWidth:count>0?"5px":0}}/>
                     </div>
+                    <div style={{fontSize:"13px",fontWeight:700,color,width:"24px",textAlign:"right",flexShrink:0}}>{count}</div>
                   </div>
                 );
               })}
             </div>
           )}
-        </SectionCard>
+        </div>
 
       </div>
 
-      {/* ── Recent Activity ───────────────────────────────────────────────────── */}
-      <div style={{ marginTop: SPACING.base }}>
-        <SectionCard
-          title="Recent Call Activity"
-          badge={recentCalls !== null ? `Last ${recentCalls.length}` : null}
-        >
-          {recentCalls === null ? (
-            <LoadingRows />
-          ) : recentCalls.length === 0 ? (
-            <div style={S.emptyState}>
-              <div style={S.emptyIcon}>📞</div>
-              <div>No calls logged yet — make your first call to see activity here</div>
-            </div>
-          ) : (
-            <div style={S.activityList}>
-              {recentCalls.map((call, idx) => {
-                const outcomeConf = OUTCOME_CONFIG[call.outcome] ?? {
-                  color: COLORS.textMuted,
-                  bg: COLORS.surfaceActive,
-                  label: call.outcome ?? "Unknown",
-                };
-                return (
-                  <div
-                    key={call.id}
-                    style={{
-                      ...S.activityItem,
-                      ...(idx === recentCalls.length - 1
-                        ? { borderBottom: "none" }
-                        : {}),
-                    }}
-                  >
-                    {/* Colour dot */}
-                    <div
-                      style={{
-                        ...S.activityDot,
-                        backgroundColor: outcomeConf.color,
-                        boxShadow: `0 0 6px ${outcomeConf.color}60`,
-                      }}
-                    />
+      {/* Recent Activity */}
+      <div style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",overflow:"hidden",animation:"v2fu .35s ease 160ms both"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:`1px solid ${T.border}`}}>
+          <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:"14px",fontWeight:700,color:T.text,display:"flex",alignItems:"center",gap:"8px"}}>
+            <ClkIco/> Recent Call Activity
+          </span>
+          <button style={{background:"none",border:"none",color:T.gold,fontFamily:"'DM Sans',sans-serif",fontSize:"12px",fontWeight:600,cursor:"pointer",padding:0}} onClick={()=>navigate("/agent/leads")}>
+            View all leads →
+          </button>
+        </div>
 
-                    {/* Lead name + duration */}
-                    <div style={S.activityMain}>
-                      <div style={S.activityLeadName}>{call.leadName}</div>
-                      <div style={S.activityMeta}>
-                        {formatDuration(call.duration)}{" "}
-                        {call.aiSummary && (
-                          <span
-                            style={{
-                              color: COLORS.accent,
-                              marginLeft: SPACING.xs,
-                            }}
-                          >
-                            · AI summary ready
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Outcome badge + time */}
-                    <div style={S.activityRight}>
-                      <span
-                        style={{
-                          ...S.outcomeBadge,
-                          color: outcomeConf.color,
-                          backgroundColor: outcomeConf.bg,
-                        }}
-                      >
-                        {outcomeConf.label}
-                      </span>
-                      <span style={S.activityTime}>
-                        {timeAgo(call.createdAt)}
-                      </span>
-                    </div>
+        {recentCalls===null ? <RowSkeleton rows={5}/> :
+         recentCalls.length===0 ? (
+          <div style={{textAlign:"center",padding:"36px 20px",color:T.sub,fontSize:"13px"}}>
+            <div style={{fontSize:"28px",marginBottom:"10px",opacity:.5}}>📞</div>
+            <div style={{color:T.text,fontSize:"14px",fontWeight:600,marginBottom:"4px"}}>No calls yet</div>
+            <div>Make your first call to see activity here</div>
+          </div>
+        ) : (
+          recentCalls.map((call,idx)=>{
+            const oc=OUTCOME_CFG[call.outcome]??{color:T.sub,bg:"rgba(154,154,154,.08)"};
+            return (
+              <div key={call.id} className="v2row"
+                style={{display:"flex",alignItems:"center",gap:"12px",padding:"12px 20px",borderBottom:idx===recentCalls.length-1?"none":`1px solid ${T.border}`,cursor:"pointer",minHeight:"44px",transition:"background .15s",animation:`v2slr .2s ease ${idx*40}ms both`}}
+                onClick={()=>call.leadId&&navigate(`/agent/lead/${call.leadId}`)}
+              >
+                <div style={{width:"7px",height:"7px",borderRadius:"50%",backgroundColor:oc.color,boxShadow:`0 0 6px ${oc.color}50`,flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"14px",fontWeight:600,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{call.leadName??"—"}</div>
+                  <div style={{fontSize:"12px",color:T.sub,marginTop:"1px"}}>
+                    {fmtDur(call.duration)}
+                    {call.aiSummary&&<span style={{color:T.gold,marginLeft:"8px"}}>· AI summary ready</span>}
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </SectionCard>
+                </div>
+                {call.outcome&&(
+                  <span style={{fontSize:"11px",fontWeight:700,padding:"3px 10px",borderRadius:"20px",color:oc.color,backgroundColor:oc.bg,whiteSpace:"nowrap",flexShrink:0}}>
+                    {call.outcome}
+                  </span>
+                )}
+                <span style={{fontSize:"11px",color:T.sub,flexShrink:0}}>{timeAgo(call.createdAt)}</span>
+              </div>
+            );
+          })
+        )}
       </div>
 
     </div>
   );
 };
-
-// ─── Greeting helper (outside component — no re-render cost) ──────────────────
-
-function greeting() {
-  const h = new Date().getHours();
-  if (h < 12) return "morning";
-  if (h < 17) return "afternoon";
-  return "evening";
-}
 
 export default AgentDashboard;
