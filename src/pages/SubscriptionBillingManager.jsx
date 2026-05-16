@@ -219,7 +219,7 @@ export const SubscriptionBillingManager = () => {
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:12,marginBottom:24}}>
         <StatCard icon="💰" label="Total Revenue"   value={loading?"…":fmtRupee(totalRevenue)}  sub="all paid" color={C.green} />
         <StatCard icon="📅" label="This Month"      value={loading?"…":fmtRupee(monthRevenue)}  sub="subscriptions" color={C.gold} />
-        <StatCard icon="📈" label="Est. MRR"        value={loading?"…":fmtRupee(mrr)}           sub="active companies" color:C.blue color={C.blue} />
+        <StatCard icon="📈" label="Est. MRR" value={loading?"…":fmtRupee(mrr)} sub="active companies" color={C.blue} />
         <StatCard icon="⏳" label="Pending"         value={loading?"…":pendingCount}             sub="payments" color={C.warn} />
         <StatCard icon="🔔" label="Renewing Soon"   value={loading?"…":expiringSoon}             sub="within 7 days" color={expiringSoon>0?C.red:C.textSub} />
       </div>
