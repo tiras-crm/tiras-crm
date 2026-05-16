@@ -1,619 +1,131 @@
-// TIRAS CRM — TeamManagement.jsx
-// Company Admin — add agents/managers, assign roles, activate/deactivate team members
-// All queries scoped by companyId. New user creation calls Cloud Function "createTeamMember".
+// TIRAS CRM V2 — TeamManagement.jsx  (UPPARA account)
+// Real-time team roster via onSnapshot · mobile cards · desktop table
+// Add member via Cloud Function · edit/deactivate with toast
 //
-// USAGE:
-//   1. Drop into src/pages/TeamManagement.jsx
-//   2. In src/pages/index.js replace:
-//        export const TeamManagement = () => <Placeholder name="Team Management" />;
-//      with:
-//        export { TeamManagement } from "./TeamManagement";
-//
-// CLOUD FUNCTION REQUIRED — "createTeamMember":
-//   The Add Member flow calls httpsCallable(functions, "createTeamMember").
-//   That function must: create Firebase Auth user → send password-reset email
-//   → write users/{uid} doc in Firestore with the payload below.
-//   Until deployed, the "Add Member" button will show the API error — everything
-//   else (list, edit, deactivate) works against live Firestore data.
+// src/pages/TeamManagement.jsx
+// export { TeamManagement } from "./TeamManagement";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  updateDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+import { collection, query, where, doc, updateDoc, onSnapshot, serverTimestamp } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions, COLLECTIONS, ROLES } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 import {
-  COLORS,
-  FONTS,
-  SPACING,
-  RADIUS,
-  SHADOWS,
-  STYLES,
-  TRANSITIONS,
-  ROLE_CONFIG,
-} from "../theme";
-import {
-  RiAddLine,
-  RiSearchLine,
-  RiEditLine,
-  RiUserLine,
-  RiShieldUserLine,
-  RiTeamLine,
-  RiCheckboxCircleLine,
-  RiIndeterminateCircleLine,
-  RiLoader4Line,
-  RiCloseLine,
-  RiMailLine,
-  RiAlertLine,
-  RiUserSettingsLine,
+  RiAddLine, RiSearchLine, RiEditLine, RiUserLine,
+  RiShieldUserLine, RiTeamLine, RiCheckboxCircleLine,
+  RiIndeterminateCircleLine, RiLoader4Line, RiCloseLine,
+  RiMailLine, RiAlertLine, RiCheckLine, RiUserSettingsLine,
   RiRefreshLine,
 } from "react-icons/ri";
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── V2 Design tokens ─────────────────────────────────────────────────────────
+const C = {
+  bg:"#121212",surface:"#1A1A1B",surfaceHov:"#202022",surfaceAct:"#232325",
+  gold:"#D4AF37",goldMuted:"rgba(212,175,55,0.12)",goldBorder:"rgba(212,175,55,0.25)",
+  red:"#E63946",redMuted:"rgba(230,57,70,0.12)",
+  text:"#F5F5F5",sub:"#9A9A9A",border:"#2A2A2B",
+  success:"#2ECC71",successMuted:"rgba(46,204,113,0.12)",
+  warning:"#F39C12",warningMuted:"rgba(243,156,18,0.12)",
+  info:"#3498DB",infoMuted:"rgba(52,152,219,0.12)",
+};
+const FH="'Playfair Display',Georgia,serif";
+const FB="'DM Sans',system-ui,sans-serif";
+const R={sm:"6px",md:"8px",lg:"12px",xl:"16px",full:"9999px"};
+const SH={sm:"0 1px 3px rgba(0,0,0,0.4)",md:"0 4px 16px rgba(0,0,0,0.5)"};
+const TR="all 0.15s ease";
 
-const ROLE_OPTIONS = [
-  {
-    value: ROLES.MANAGER,
-    label: "Manager",
-    desc: "Sees his agents, their leads, call recordings. Can assign tickets.",
-  },
-  {
-    value: ROLES.AGENT,
-    label: "Agent",
-    desc: "Sees only his own assigned leads, calls, and follow-ups.",
-  },
-  {
-    value: ROLES.SUPPORT_AGENT,
-    label: "Support Agent",
-    desc: "Sees only tickets assigned to them and linked recordings.",
-  },
+const ROLE_OPTIONS=[
+  {value:ROLES.MANAGER,label:"Manager",desc:"Sees his agents, leads, recordings. Can assign tickets.",color:C.gold},
+  {value:ROLES.AGENT,label:"Agent",desc:"Sees only his own assigned leads and calls.",color:C.info},
+  {value:ROLES.SUPPORT_AGENT,label:"Support Agent",desc:"Sees only tickets assigned to them.",color:C.success},
 ];
+const ROLE_COLOR={[ROLES.MANAGER]:{c:C.gold,bg:C.goldMuted},[ROLES.AGENT]:{c:C.info,bg:C.infoMuted},[ROLES.SUPPORT_AGENT]:{c:C.success,bg:C.successMuted}};
+const FILTER_TABS=[{v:"all",l:"All"},{v:ROLES.MANAGER,l:"Managers"},{v:ROLES.AGENT,l:"Agents"},{v:ROLES.SUPPORT_AGENT,l:"Support"}];
 
-const FILTER_TABS = [
-  { value: "all", label: "All" },
-  { value: ROLES.MANAGER, label: "Managers" },
-  { value: ROLES.AGENT, label: "Agents" },
-  { value: ROLES.SUPPORT_AGENT, label: "Support" },
-];
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const nameColor=(name="")=>{const h=[C.gold,C.info,C.success,"#9B59B6","#1ABC9C",C.warning];let s=0;for(let i=0;i<name.length;i++)s+=name.charCodeAt(i);return h[s%h.length];};
+const lastActive=(ts)=>{if(!ts)return"Never";const d=ts.toDate?ts.toDate():new Date(ts),s=Math.floor((Date.now()-d)/1000);if(s<60)return"Just now";if(s<3600)return`${Math.floor(s/60)}m ago`;if(s<86400)return`${Math.floor(s/3600)}h ago`;return`${Math.floor(s/86400)}d ago`;};
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── SK shimmer ───────────────────────────────────────────────────────────────
+const SK=({w="100%",h="16px",r=R.md})=>(<div style={{width:w,height:h,borderRadius:r,background:`linear-gradient(90deg,${C.surface} 25%,#232325 50%,${C.surface} 75%)`,backgroundSize:"200% 100%",animation:"v2Shimmer 1.6s ease-in-out infinite"}}/>);
 
-const formatLastActive = (ts) => {
-  if (!ts) return "Never";
-  const date = ts.toDate ? ts.toDate() : new Date(ts);
-  const diff = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diff < 60) return "Just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-};
+// ─── Toast ────────────────────────────────────────────────────────────────────
+const Toast=({msg,type="success"})=>{const col=type==="error"?C.red:C.success;return(<div style={{position:"fixed",bottom:"24px",right:"24px",backgroundColor:C.surfaceAct,border:`1px solid ${col}50`,borderLeft:`3px solid ${col}`,borderRadius:R.md,padding:"10px 18px",display:"flex",alignItems:"center",gap:"8px",boxShadow:SH.md,zIndex:3000,fontFamily:FB,fontSize:"13px",color:C.text,animation:"v2SlideIn 0.25s ease"}}>{type==="error"?<RiAlertLine size={15} color={col}/>:<RiCheckLine size={15} color={col}/> }{msg}</div>);};
 
-/** Returns a stable hue for a given string (for avatar background) */
-const nameToColor = (name = "") => {
-  const hues = [
-    COLORS.primary,
-    COLORS.info,
-    COLORS.success,
-    COLORS.accent,
-    "#9B59B6",
-    "#1ABC9C",
-  ];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash += name.charCodeAt(i);
-  return hues[hash % hues.length];
-};
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+const Avatar=({name,size=38})=>{const col=nameColor(name);return(<div style={{width:size,height:size,borderRadius:"50%",backgroundColor:col+"22",border:`2px solid ${col}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FH,fontSize:size*0.38,fontWeight:700,color:col,flexShrink:0,userSelect:"none"}}>{(name||"?").charAt(0).toUpperCase()}</div>);};
 
-// ─── RoleBadge ───────────────────────────────────────────────────────────────
+// ─── Role Badge ───────────────────────────────────────────────────────────────
+const RoleBadge=({role})=>{const cfg=ROLE_COLOR[role]||{c:C.sub,bg:C.surfaceAct};return(<span style={{fontSize:"11px",fontWeight:600,fontFamily:FB,color:cfg.c,backgroundColor:cfg.bg,border:`1px solid ${cfg.c}30`,borderRadius:R.full,padding:"3px 10px",whiteSpace:"nowrap"}}>{ROLE_OPTIONS.find(r=>r.value===role)?.label||role}</span>);};
 
-const RoleBadge = ({ role }) => {
-  const cfg = ROLE_CONFIG[role] || {
-    label: role,
-    color: COLORS.textSecondary,
-    bg: COLORS.surfaceActive,
-  };
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: `2px ${SPACING.sm}`,
-        borderRadius: RADIUS.full,
-        fontSize: FONTS.size.xs,
-        fontWeight: FONTS.weight.semibold,
-        color: cfg.color,
-        backgroundColor: cfg.bg,
-        border: `1px solid ${cfg.color}30`,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {cfg.label}
-    </span>
-  );
-};
+// ─── Status Badge ─────────────────────────────────────────────────────────────
+const StatusBadge=({active})=>(<span style={{fontSize:"11px",fontWeight:600,fontFamily:FB,display:"inline-flex",alignItems:"center",gap:"4px",color:active!==false?C.success:C.sub,backgroundColor:active!==false?C.successMuted:C.surfaceAct,border:`1px solid ${active!==false?C.success+"30":C.border}`,borderRadius:R.full,padding:"3px 10px"}}><span style={{width:"5px",height:"5px",borderRadius:"50%",backgroundColor:active!==false?C.success:C.sub,flexShrink:0}}/>{active!==false?"Active":"Inactive"}</span>);
 
-// ─── StatusBadge ─────────────────────────────────────────────────────────────
+// ─── Mini Stat ────────────────────────────────────────────────────────────────
+const MiniStat=({icon:Icon,ic,label,value,loading})=>(<div style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,padding:"14px 16px",display:"flex",alignItems:"center",gap:"12px"}}><div style={{width:"36px",height:"36px",borderRadius:R.md,backgroundColor:ic+"20",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon size={17} color={ic}/></div><div><div style={{fontFamily:FB,fontSize:loading?"14px":"22px",fontWeight:700,color:loading?C.sub:C.text,lineHeight:1.1}}>{loading?"—":value}</div><div style={{fontFamily:FB,fontSize:"12px",color:C.sub,marginTop:"2px"}}>{label}</div></div></div>);
 
-const StatusBadge = ({ isActive }) => (
-  <span
-    style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "4px",
-      padding: `2px ${SPACING.sm}`,
-      borderRadius: RADIUS.full,
-      fontSize: FONTS.size.xs,
-      fontWeight: FONTS.weight.semibold,
-      color: isActive !== false ? COLORS.success : COLORS.textMuted,
-      backgroundColor:
-        isActive !== false ? COLORS.successMuted : COLORS.surfaceActive,
-      border: `1px solid ${isActive !== false ? COLORS.success + "30" : COLORS.border}`,
-    }}
-  >
-    <span
-      style={{
-        width: "5px",
-        height: "5px",
-        borderRadius: "50%",
-        backgroundColor:
-          isActive !== false ? COLORS.success : COLORS.textMuted,
-        flexShrink: 0,
-      }}
-    />
-    {isActive !== false ? "Active" : "Inactive"}
-  </span>
-);
-
-// ─── MemberAvatar ─────────────────────────────────────────────────────────────
-
-const MemberAvatar = ({ name, size = 38 }) => {
-  const initial = (name || "?").charAt(0).toUpperCase();
-  const color = nameToColor(name);
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: "50%",
-        backgroundColor: color + "22",
-        border: `2px solid ${color}50`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: size * 0.38,
-        fontWeight: FONTS.weight.bold,
-        color: color,
-        flexShrink: 0,
-        userSelect: "none",
-      }}
-    >
-      {initial}
-    </div>
-  );
-};
-
-// ─── Mini Stat Tile ───────────────────────────────────────────────────────────
-
-const MiniStat = ({ icon: Icon, iconColor, label, value, loading }) => (
-  <div
-    style={{
-      backgroundColor: COLORS.surface,
-      border: `1px solid ${COLORS.border}`,
-      borderRadius: RADIUS.lg,
-      padding: `${SPACING.base} ${SPACING.lg}`,
-      display: "flex",
-      alignItems: "center",
-      gap: SPACING.md,
-    }}
-  >
-    <div
-      style={{
-        width: "36px",
-        height: "36px",
-        borderRadius: RADIUS.md,
-        backgroundColor: iconColor + "20",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      <Icon size={18} color={iconColor} />
-    </div>
-    <div>
-      <div
-        style={{
-          fontSize: loading ? FONTS.size.base : FONTS.size["2xl"],
-          fontWeight: FONTS.weight.bold,
-          color: loading ? COLORS.textMuted : COLORS.textPrimary,
-          lineHeight: 1.1,
-        }}
-      >
-        {loading ? "—" : value}
-      </div>
-      <div
-        style={{
-          fontSize: FONTS.size.xs,
-          color: COLORS.textSecondary,
-          marginTop: "2px",
-        }}
-      >
-        {label}
-      </div>
-    </div>
-  </div>
-);
-
-// ─── FormField ────────────────────────────────────────────────────────────────
-
-const FormField = ({ label, error, required, children }) => (
-  <div style={{ marginBottom: SPACING.base }}>
-    <label
-      style={{
-        display: "block",
-        fontSize: FONTS.size.sm,
-        fontWeight: FONTS.weight.medium,
-        color: COLORS.textSecondary,
-        marginBottom: SPACING.xs,
-      }}
-    >
-      {label}
-      {required && (
-        <span style={{ color: COLORS.danger, marginLeft: "3px" }}>*</span>
-      )}
-    </label>
-    {children}
-    {error && (
-      <div
-        style={{
-          fontSize: FONTS.size.xs,
-          color: COLORS.danger,
-          marginTop: "4px",
-          display: "flex",
-          alignItems: "center",
-          gap: "4px",
-        }}
-      >
-        <RiAlertLine size={11} />
-        {error}
-      </div>
-    )}
-  </div>
-);
-
-// ─── AddEditModal ─────────────────────────────────────────────────────────────
-
-const AddEditModal = ({
-  mode, // "add" | "edit"
-  formData,
-  setFormData,
-  formErrors,
-  submitError,
-  submitting,
-  managers, // list of manager-role members for the "assign manager" dropdown
-  onClose,
-  onSubmit,
-}) => {
-  const overlayRef = useRef(null);
-
-  // Close on backdrop click
-  const handleOverlayClick = (e) => {
-    if (e.target === overlayRef.current) onClose();
-  };
-
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  const isAdd = mode === "add";
-
-  const inputStyle = {
-    ...STYLES.input,
-    padding: `${SPACING.sm} ${SPACING.md}`,
-  };
-
-  const inputFocusStyle = (hasError) => ({
-    ...inputStyle,
-    border: `1px solid ${hasError ? COLORS.danger : COLORS.inputBorder}`,
-    transition: TRANSITIONS.fast,
-  });
-
-  return (
-    <div
-      ref={overlayRef}
-      onClick={handleOverlayClick}
-      style={{
-        position: "fixed",
-        inset: 0,
-        backgroundColor: "rgba(0,0,0,0.65)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-        padding: SPACING.base,
-      }}
-    >
-      <div
-        style={{
-          backgroundColor: COLORS.surface,
-          border: `1px solid ${COLORS.border}`,
-          borderRadius: RADIUS.xl,
-          width: "100%",
-          maxWidth: "480px",
-          boxShadow: SHADOWS.lg,
-          overflow: "hidden",
-        }}
-      >
-        {/* Modal Header */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: `${SPACING.lg} ${SPACING.xl}`,
-            borderBottom: `1px solid ${COLORS.border}`,
-          }}
-        >
+// ─── Add/Edit Modal ───────────────────────────────────────────────────────────
+const AddEditModal=({mode,formData,setFormData,formErrors,submitError,submitting,managers,onClose,onSubmit})=>{
+  const overlayRef=useRef(null);
+  useEffect(()=>{const h=(e)=>{if(e.key==="Escape")onClose();};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);},[onClose]);
+  const isAdd=mode==="add";
+  const inp={width:"100%",boxSizing:"border-box",backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"10px 14px",color:C.text,fontFamily:FB,fontSize:"14px",outline:"none",transition:TR};
+  return(
+    <div ref={overlayRef} onClick={e=>{if(e.target===overlayRef.current)onClose();}} style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"16px"}}>
+      <div style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.xl,width:"100%",maxWidth:"460px",boxShadow:SH.md,overflow:"hidden",animation:"v2FadeUp 0.2s ease"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:`1px solid ${C.border}`}}>
           <div>
-            <div
-              style={{
-                fontSize: FONTS.size.xl,
-                fontWeight: FONTS.weight.bold,
-                color: COLORS.textPrimary,
-              }}
-            >
-              {isAdd ? "Add Team Member" : "Edit Team Member"}
+            <div style={{fontFamily:FH,fontSize:"18px",fontWeight:700,color:C.text}}>{isAdd?"Add Team Member":"Edit Member"}</div>
+            <div style={{fontFamily:FB,fontSize:"12px",color:C.sub,marginTop:"2px"}}>{isAdd?"Member receives a password setup email":"Email cannot be changed here"}</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.sub,padding:"4px",display:"flex"}}><RiCloseLine size={20}/></button>
+        </div>
+        <div style={{padding:"20px"}}>
+          {/* Name */}
+          <div style={{marginBottom:"14px"}}>
+            <label style={{display:"block",fontFamily:FB,fontSize:"12px",fontWeight:600,color:C.sub,marginBottom:"6px"}}>Full Name <span style={{color:C.red}}>*</span></label>
+            <input value={formData.displayName} onChange={e=>setFormData(p=>({...p,displayName:e.target.value}))} placeholder="e.g. Priya Sharma" style={{...inp,borderColor:formErrors.displayName?C.red:C.border}}/>
+            {formErrors.displayName&&<div style={{fontFamily:FB,fontSize:"11px",color:C.red,marginTop:"4px",display:"flex",alignItems:"center",gap:"3px"}}><RiAlertLine size={10}/>{formErrors.displayName}</div>}
+          </div>
+          {/* Email — add only */}
+          {isAdd&&(
+            <div style={{marginBottom:"14px"}}>
+              <label style={{display:"block",fontFamily:FB,fontSize:"12px",fontWeight:600,color:C.sub,marginBottom:"6px"}}>Email Address <span style={{color:C.red}}>*</span></label>
+              <input type="email" value={formData.email} onChange={e=>setFormData(p=>({...p,email:e.target.value}))} placeholder="priya@company.com" style={{...inp,borderColor:formErrors.email?C.red:C.border}}/>
+              {formErrors.email&&<div style={{fontFamily:FB,fontSize:"11px",color:C.red,marginTop:"4px",display:"flex",alignItems:"center",gap:"3px"}}><RiAlertLine size={10}/>{formErrors.email}</div>}
             </div>
-            <div
-              style={{
-                fontSize: FONTS.size.sm,
-                color: COLORS.textSecondary,
-                marginTop: "2px",
-              }}
-            >
-              {isAdd
-                ? "Member will receive a password setup email"
-                : "Email address cannot be changed"}
+          )}
+          {/* Role */}
+          <div style={{marginBottom:"14px"}}>
+            <label style={{display:"block",fontFamily:FB,fontSize:"12px",fontWeight:600,color:C.sub,marginBottom:"8px"}}>Role <span style={{color:C.red}}>*</span></label>
+            <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+              {ROLE_OPTIONS.map(opt=>{const sel=formData.role===opt.value;return(
+                <div key={opt.value} onClick={()=>setFormData(p=>({...p,role:opt.value}))} style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 14px",borderRadius:R.md,border:`1px solid ${sel?opt.color+"60":C.border}`,backgroundColor:sel?opt.color+"12":"transparent",cursor:"pointer",transition:TR}}>
+                  <div style={{width:"16px",height:"16px",borderRadius:"50%",border:`2px solid ${sel?opt.color:C.border}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:TR}}>
+                    {sel&&<div style={{width:"7px",height:"7px",borderRadius:"50%",backgroundColor:opt.color}}/>}
+                  </div>
+                  <div><div style={{fontFamily:FB,fontSize:"13px",fontWeight:600,color:sel?opt.color:C.text}}>{opt.label}</div><div style={{fontFamily:FB,fontSize:"11px",color:C.sub,marginTop:"2px"}}>{opt.desc}</div></div>
+                </div>
+              );})}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              color: COLORS.textSecondary,
-              padding: SPACING.xs,
-              display: "flex",
-              alignItems: "center",
-              borderRadius: RADIUS.base,
-            }}
-          >
-            <RiCloseLine size={22} />
-          </button>
-        </div>
-
-        {/* Modal Body */}
-        <div style={{ padding: SPACING.xl }}>
-          {/* Full Name */}
-          <FormField label="Full Name" error={formErrors.displayName} required>
-            <input
-              type="text"
-              placeholder="e.g. Priya Sharma"
-              value={formData.displayName}
-              onChange={(e) =>
-                setFormData((p) => ({ ...p, displayName: e.target.value }))
-              }
-              style={inputFocusStyle(!!formErrors.displayName)}
-            />
-          </FormField>
-
-          {/* Email — only shown for Add */}
-          {isAdd && (
-            <FormField label="Email Address" error={formErrors.email} required>
-              <input
-                type="email"
-                placeholder="e.g. priya@company.com"
-                value={formData.email}
-                onChange={(e) =>
-                  setFormData((p) => ({ ...p, email: e.target.value }))
-                }
-                style={inputFocusStyle(!!formErrors.email)}
-              />
-            </FormField>
-          )}
-
-          {/* Role Selection */}
-          <FormField label="Role" error={formErrors.role} required>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: SPACING.sm,
-              }}
-            >
-              {ROLE_OPTIONS.map((opt) => {
-                const selected = formData.role === opt.value;
-                const cfg = ROLE_CONFIG[opt.value];
-                return (
-                  <div
-                    key={opt.value}
-                    onClick={() =>
-                      setFormData((p) => ({ ...p, role: opt.value }))
-                    }
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: SPACING.md,
-                      padding: `${SPACING.sm} ${SPACING.md}`,
-                      borderRadius: RADIUS.md,
-                      border: `1px solid ${
-                        selected ? cfg.color + "60" : COLORS.border
-                      }`,
-                      backgroundColor: selected ? cfg.bg : "transparent",
-                      cursor: "pointer",
-                      transition: TRANSITIONS.fast,
-                    }}
-                  >
-                    {/* Radio circle */}
-                    <div
-                      style={{
-                        width: "16px",
-                        height: "16px",
-                        borderRadius: "50%",
-                        border: `2px solid ${
-                          selected ? cfg.color : COLORS.border
-                        }`,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                        transition: TRANSITIONS.fast,
-                      }}
-                    >
-                      {selected && (
-                        <div
-                          style={{
-                            width: "7px",
-                            height: "7px",
-                            borderRadius: "50%",
-                            backgroundColor: cfg.color,
-                          }}
-                        />
-                      )}
-                    </div>
-                    <div>
-                      <div
-                        style={{
-                          fontSize: FONTS.size.sm,
-                          fontWeight: FONTS.weight.semibold,
-                          color: selected ? cfg.color : COLORS.textPrimary,
-                        }}
-                      >
-                        {opt.label}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: FONTS.size.xs,
-                          color: COLORS.textSecondary,
-                          marginTop: "1px",
-                          lineHeight: 1.4,
-                        }}
-                      >
-                        {opt.desc}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </FormField>
-
-          {/* Assign to Manager — only for Agents */}
-          {formData.role === ROLES.AGENT && managers.length > 0 && (
-            <FormField label="Assign to Manager" error={formErrors.managerId}>
-              <select
-                value={formData.managerId}
-                onChange={(e) =>
-                  setFormData((p) => ({ ...p, managerId: e.target.value }))
-                }
-                style={{
-                  ...inputStyle,
-                  appearance: "none",
-                  cursor: "pointer",
-                }}
-              >
+          {/* Assign to manager */}
+          {formData.role===ROLES.AGENT&&managers.length>0&&(
+            <div style={{marginBottom:"14px"}}>
+              <label style={{display:"block",fontFamily:FB,fontSize:"12px",fontWeight:600,color:C.sub,marginBottom:"6px"}}>Assign to Manager</label>
+              <select value={formData.managerId} onChange={e=>setFormData(p=>({...p,managerId:e.target.value}))} style={{...inp,appearance:"none",cursor:"pointer"}}>
                 <option value="">— Unassigned —</option>
-                {managers.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.displayName || m.email}
-                  </option>
-                ))}
+                {managers.map(m=><option key={m.id} value={m.id}>{m.displayName||m.email}</option>)}
               </select>
-            </FormField>
-          )}
-
-          {/* API error */}
-          {submitError && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: SPACING.sm,
-                padding: SPACING.md,
-                borderRadius: RADIUS.md,
-                backgroundColor: COLORS.dangerMuted,
-                border: `1px solid ${COLORS.danger}40`,
-                marginBottom: SPACING.base,
-              }}
-            >
-              <RiAlertLine
-                size={16}
-                color={COLORS.danger}
-                style={{ flexShrink: 0, marginTop: "1px" }}
-              />
-              <div
-                style={{
-                  fontSize: FONTS.size.sm,
-                  color: COLORS.danger,
-                  lineHeight: 1.5,
-                }}
-              >
-                {submitError}
-              </div>
             </div>
           )}
+          {submitError&&(<div style={{display:"flex",alignItems:"flex-start",gap:"8px",padding:"10px 14px",borderRadius:R.md,backgroundColor:C.redMuted,border:`1px solid ${C.red}40`,marginBottom:"14px"}}><RiAlertLine size={15} color={C.red} style={{flexShrink:0,marginTop:"1px"}}/><div style={{fontFamily:FB,fontSize:"13px",color:C.red,lineHeight:1.5}}>{submitError}</div></div>)}
         </div>
-
-        {/* Modal Footer */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: SPACING.md,
-            padding: `${SPACING.base} ${SPACING.xl}`,
-            borderTop: `1px solid ${COLORS.border}`,
-          }}
-        >
-          <button onClick={onClose} style={{ ...STYLES.buttonSecondary }}>
-            Cancel
-          </button>
-          <button
-            onClick={onSubmit}
-            disabled={submitting}
-            style={{
-              ...STYLES.buttonPrimary,
-              display: "flex",
-              alignItems: "center",
-              gap: SPACING.xs,
-              opacity: submitting ? 0.6 : 1,
-              cursor: submitting ? "not-allowed" : "pointer",
-            }}
-          >
-            {submitting ? (
-              <>
-                <RiLoader4Line
-                  size={15}
-                  style={{ animation: "tirasSpinKf 0.8s linear infinite" }}
-                />
-                {isAdd ? "Creating…" : "Saving…"}
-              </>
-            ) : (
-              <>
-                <RiCheckboxCircleLine size={15} />
-                {isAdd ? "Create Member" : "Save Changes"}
-              </>
-            )}
+        <div style={{display:"flex",justifyContent:"flex-end",gap:"10px",padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
+          <button onClick={onClose} style={{backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"14px",fontWeight:500,padding:"8px 16px",cursor:"pointer"}}>Cancel</button>
+          <button onClick={onSubmit} disabled={submitting} style={{backgroundColor:C.gold,color:"#000",border:"none",borderRadius:R.md,fontFamily:FB,fontSize:"14px",fontWeight:700,padding:"8px 18px",cursor:submitting?"not-allowed":"pointer",opacity:submitting?0.6:1,display:"flex",alignItems:"center",gap:"5px"}}>
+            {submitting?<><RiLoader4Line size={14} style={{animation:"v2Spin 0.8s linear infinite"}}/>{isAdd?"Creating…":"Saving…"}</>:<><RiCheckLine size={14}/>{isAdd?"Create Member":"Save Changes"}</>}
           </button>
         </div>
       </div>
@@ -621,794 +133,165 @@ const AddEditModal = ({
   );
 };
 
-// ─── DeactivateDialog ─────────────────────────────────────────────────────────
-
-const DeactivateDialog = ({ member, onCancel, onConfirm, processing }) => (
-  <div
-    style={{
-      position: "fixed",
-      inset: 0,
-      backgroundColor: "rgba(0,0,0,0.7)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 1100,
-      padding: SPACING.base,
-    }}
-  >
-    <div
-      style={{
-        backgroundColor: COLORS.surface,
-        border: `1px solid ${COLORS.danger}40`,
-        borderRadius: RADIUS.xl,
-        width: "100%",
-        maxWidth: "380px",
-        padding: SPACING.xl,
-        boxShadow: SHADOWS.lg,
-      }}
-    >
-      <div
-        style={{
-          width: "44px",
-          height: "44px",
-          borderRadius: RADIUS.lg,
-          backgroundColor: COLORS.dangerMuted,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          marginBottom: SPACING.base,
-        }}
-      >
-        <RiIndeterminateCircleLine size={22} color={COLORS.danger} />
-      </div>
-
-      <div
-        style={{
-          fontSize: FONTS.size.lg,
-          fontWeight: FONTS.weight.bold,
-          color: COLORS.textPrimary,
-          marginBottom: SPACING.xs,
-        }}
-      >
-        {member.isActive !== false ? "Deactivate" : "Reactivate"}{" "}
-        {member.displayName?.split(" ")[0] || "Member"}?
-      </div>
-
-      <div
-        style={{
-          fontSize: FONTS.size.sm,
-          color: COLORS.textSecondary,
-          lineHeight: 1.6,
-          marginBottom: SPACING.xl,
-        }}
-      >
-        {member.isActive !== false
-          ? `${member.displayName || "This member"} will lose access immediately and cannot log in until reactivated. Their data remains untouched.`
-          : `${member.displayName || "This member"} will regain full access based on their role.`}
-      </div>
-
-      <div style={{ display: "flex", gap: SPACING.md }}>
-        <button
-          onClick={onCancel}
-          style={{ ...STYLES.buttonSecondary, flex: 1 }}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onConfirm}
-          disabled={processing}
-          style={{
-            flex: 1,
-            backgroundColor:
-              member.isActive !== false ? COLORS.danger : COLORS.success,
-            color: "#fff",
-            border: "none",
-            borderRadius: RADIUS.base,
-            fontFamily: FONTS.family,
-            fontSize: FONTS.size.base,
-            fontWeight: FONTS.weight.semibold,
-            padding: `${SPACING.sm} ${SPACING.xl}`,
-            cursor: processing ? "not-allowed" : "pointer",
-            opacity: processing ? 0.6 : 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: SPACING.xs,
-          }}
-        >
-          {processing ? (
-            <RiLoader4Line
-              size={15}
-              style={{ animation: "tirasSpinKf 0.8s linear infinite" }}
-            />
-          ) : null}
-          {member.isActive !== false ? "Yes, Deactivate" : "Yes, Reactivate"}
-        </button>
+// ─── Deactivate Dialog ────────────────────────────────────────────────────────
+const DeactivateDialog=({member,onCancel,onConfirm,processing})=>(
+  <div style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:"16px"}}>
+    <div style={{backgroundColor:C.surface,border:`1px solid ${C.red}40`,borderRadius:R.xl,width:"100%",maxWidth:"360px",padding:"24px",boxShadow:SH.md,animation:"v2FadeUp 0.2s ease"}}>
+      <div style={{width:"44px",height:"44px",borderRadius:R.lg,backgroundColor:C.redMuted,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"14px"}}><RiIndeterminateCircleLine size={22} color={C.red}/></div>
+      <div style={{fontFamily:FH,fontSize:"18px",fontWeight:700,color:C.text,marginBottom:"8px"}}>{member.isActive!==false?"Deactivate":"Reactivate"} {member.displayName?.split(" ")[0]||"Member"}?</div>
+      <div style={{fontFamily:FB,fontSize:"13px",color:C.sub,lineHeight:1.6,marginBottom:"20px"}}>{member.isActive!==false?`${member.displayName||"This member"} will lose access immediately. Data stays untouched.`:`${member.displayName||"This member"} will regain full access.`}</div>
+      <div style={{display:"flex",gap:"10px"}}>
+        <button onClick={onCancel} style={{flex:1,backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"14px",fontWeight:500,padding:"10px 0",cursor:"pointer"}}>Cancel</button>
+        <button onClick={onConfirm} disabled={processing} style={{flex:1,backgroundColor:member.isActive!==false?C.red:C.success,color:"#fff",border:"none",borderRadius:R.md,fontFamily:FB,fontSize:"14px",fontWeight:700,padding:"10px 0",cursor:processing?"not-allowed":"pointer",opacity:processing?0.6:1,display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>{processing?<RiLoader4Line size={14} style={{animation:"v2Spin 0.8s linear infinite"}}/>:null}{member.isActive!==false?"Deactivate":"Reactivate"}</button>
       </div>
     </div>
   </div>
 );
 
-// ─── TeamManagement ──────────────────────────────────────────────────────────
+// ─── TeamManagement ───────────────────────────────────────────────────────────
+export const TeamManagement=()=>{
+  const {companyId,currentUser}=useAuth();
+  const [members,setMembers]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState("");
+  const [roleFilter,setRoleFilter]=useState("all");
+  const [modalMode,setModalMode]=useState(null);
+  const [selectedMember,setSelectedMember]=useState(null);
+  const [deactivateTarget,setDeactivateTarget]=useState(null);
+  const [deactivateProcessing,setDeactivateProcessing]=useState(false);
+  const [formData,setFormData]=useState({displayName:"",email:"",role:ROLES.AGENT,managerId:""});
+  const [formErrors,setFormErrors]=useState({});
+  const [submitting,setSubmitting]=useState(false);
+  const [submitError,setSubmitError]=useState("");
+  const [toast,setToast]=useState(null);
 
-export const TeamManagement = () => {
-  const { companyId, currentUser } = useAuth();
+  const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
 
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  // onSnapshot
+  useEffect(()=>{
+    if(!companyId)return;
+    const unsub=onSnapshot(
+      query(collection(db,COLLECTIONS.USERS),where("companyId","==",companyId)),
+      (snap)=>{setMembers(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.displayName||"").localeCompare(b.displayName||"")));setLoading(false);},
+      (err)=>{console.error("TeamManagement snap:",err);setLoading(false);}
+    );
+    return()=>unsub();
+  },[companyId]);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [roleFilter, setRoleFilter] = useState("all");
+  const managers=members.filter(m=>m.role===ROLES.MANAGER&&m.isActive!==false);
+  const filtered=members.filter(m=>{const q=search.toLowerCase();const ms=!q||m.displayName?.toLowerCase().includes(q)||m.email?.toLowerCase().includes(q);const mr=roleFilter==="all"||m.role===roleFilter;return ms&&mr;});
+  const miniStats={total:members.length,active:members.filter(m=>m.isActive!==false).length,managers:members.filter(m=>m.role===ROLES.MANAGER).length,agents:members.filter(m=>m.role===ROLES.AGENT).length};
 
-  const [modalMode, setModalMode] = useState(null); // null | "add" | "edit"
-  const [selectedMember, setSelectedMember] = useState(null);
-  const [deactivateTarget, setDeactivateTarget] = useState(null);
-  const [deactivateProcessing, setDeactivateProcessing] = useState(false);
+  const openAdd=()=>{setFormData({displayName:"",email:"",role:ROLES.AGENT,managerId:""});setFormErrors({});setSubmitError("");setSelectedMember(null);setModalMode("add");};
+  const openEdit=(m)=>{setSelectedMember(m);setFormData({displayName:m.displayName||"",email:m.email||"",role:m.role||ROLES.AGENT,managerId:m.managerId||""});setFormErrors({});setSubmitError("");setModalMode("edit");};
+  const closeModal=()=>{if(submitting)return;setModalMode(null);setSelectedMember(null);};
 
-  const [formData, setFormData] = useState({
-    displayName: "",
-    email: "",
-    role: ROLES.AGENT,
-    managerId: "",
-  });
-  const [formErrors, setFormErrors] = useState({});
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
+  const validate=()=>{const e={};if(!formData.displayName.trim())e.displayName="Name is required";if(modalMode==="add"){if(!formData.email.trim())e.email="Email is required";else if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email))e.email="Invalid email";}if(!formData.role)e.role="Select a role";return e;};
 
-  // ── Load members ────────────────────────────────────────────────────────────
-  const loadMembers = useCallback(async () => {
-    if (!companyId) return;
-    try {
-      const snap = await getDocs(
-        query(
-          collection(db, COLLECTIONS.USERS),
-          where("companyId", "==", companyId)
-        )
-      );
-      const list = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) =>
-          (a.displayName || "").localeCompare(b.displayName || "")
-        );
-      setMembers(list);
-    } catch (err) {
-      console.error("TeamManagement: loadMembers error:", err);
-    }
-  }, [companyId]);
+  const handleAdd=async()=>{const e=validate();if(Object.keys(e).length){setFormErrors(e);return;}setSubmitting(true);setSubmitError("");try{const fn=httpsCallable(functions,"createTeamMember");await fn({displayName:formData.displayName.trim(),email:formData.email.trim().toLowerCase(),role:formData.role,companyId,managerId:formData.managerId||null});setModalMode(null);showToast("Member created — password setup email sent");}catch(err){setSubmitError(err?.message||"Failed. Is the Cloud Function deployed?");}finally{setSubmitting(false);}};
 
-  useEffect(() => {
-    setLoading(true);
-    loadMembers().finally(() => setLoading(false));
-  }, [loadMembers]);
+  const handleEdit=async()=>{const e=validate();if(Object.keys(e).length){setFormErrors(e);return;}setSubmitting(true);setSubmitError("");try{await updateDoc(doc(db,COLLECTIONS.USERS,selectedMember.id),{displayName:formData.displayName.trim(),role:formData.role,managerId:formData.managerId||null,updatedAt:serverTimestamp()});setModalMode(null);showToast("Member updated");}catch(err){setSubmitError(err?.message||"Failed to save.");}finally{setSubmitting(false);}};
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadMembers();
-    setRefreshing(false);
-  };
+  const handleToggleActive=async()=>{if(!deactivateTarget)return;setDeactivateProcessing(true);try{await updateDoc(doc(db,COLLECTIONS.USERS,deactivateTarget.id),{isActive:deactivateTarget.isActive===false,updatedAt:serverTimestamp()});showToast(deactivateTarget.isActive===false?"Member reactivated":"Member deactivated");}catch(err){showToast("Failed to update status","error");}finally{setDeactivateProcessing(false);setDeactivateTarget(null);}};
 
-  // ── Derived data ────────────────────────────────────────────────────────────
-  const managers = members.filter((m) => m.role === ROLES.MANAGER && m.isActive !== false);
+  const COLS="40px 1fr 130px 110px 120px 80px";
 
-  const filteredMembers = members.filter((m) => {
-    const q = searchQuery.toLowerCase();
-    const matchSearch =
-      !q ||
-      m.displayName?.toLowerCase().includes(q) ||
-      m.email?.toLowerCase().includes(q);
-    const matchRole = roleFilter === "all" || m.role === roleFilter;
-    return matchSearch && matchRole;
-  });
-
-  const miniStats = {
-    total: members.length,
-    active: members.filter((m) => m.isActive !== false).length,
-    managers: members.filter((m) => m.role === ROLES.MANAGER).length,
-    agents: members.filter((m) => m.role === ROLES.AGENT).length,
-  };
-
-  // ── Modal helpers ───────────────────────────────────────────────────────────
-  const openAddModal = () => {
-    setFormData({ displayName: "", email: "", role: ROLES.AGENT, managerId: "" });
-    setFormErrors({});
-    setSubmitError("");
-    setSelectedMember(null);
-    setModalMode("add");
-  };
-
-  const openEditModal = (member) => {
-    setSelectedMember(member);
-    setFormData({
-      displayName: member.displayName || "",
-      email: member.email || "",
-      role: member.role || ROLES.AGENT,
-      managerId: member.managerId || "",
-    });
-    setFormErrors({});
-    setSubmitError("");
-    setModalMode("edit");
-  };
-
-  const closeModal = () => {
-    if (submitting) return;
-    setModalMode(null);
-    setSelectedMember(null);
-  };
-
-  // ── Form validation ─────────────────────────────────────────────────────────
-  const validate = () => {
-    const errs = {};
-    if (!formData.displayName.trim()) errs.displayName = "Full name is required";
-    if (modalMode === "add") {
-      if (!formData.email.trim()) errs.email = "Email is required";
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email))
-        errs.email = "Enter a valid email address";
-    }
-    if (!formData.role) errs.role = "Select a role";
-    return errs;
-  };
-
-  // ── Add member (Cloud Function) ─────────────────────────────────────────────
-  const handleAdd = async () => {
-    const errs = validate();
-    if (Object.keys(errs).length) { setFormErrors(errs); return; }
-
-    setSubmitting(true);
-    setSubmitError("");
-
-    try {
-      const createTeamMember = httpsCallable(functions, "createTeamMember");
-      await createTeamMember({
-        displayName: formData.displayName.trim(),
-        email: formData.email.trim().toLowerCase(),
-        role: formData.role,
-        companyId,
-        managerId: formData.managerId || null,
-      });
-      await loadMembers();
-      setModalMode(null);
-    } catch (err) {
-      console.error("TeamManagement: createTeamMember error:", err);
-      setSubmitError(
-        err?.message || "Failed to create member. Check that the Cloud Function is deployed."
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // ── Edit member (direct Firestore write) ────────────────────────────────────
-  const handleEdit = async () => {
-    const errs = validate();
-    if (Object.keys(errs).length) { setFormErrors(errs); return; }
-
-    setSubmitting(true);
-    setSubmitError("");
-
-    try {
-      await updateDoc(doc(db, COLLECTIONS.USERS, selectedMember.id), {
-        displayName: formData.displayName.trim(),
-        role: formData.role,
-        managerId: formData.managerId || null,
-        updatedAt: serverTimestamp(),
-      });
-      await loadMembers();
-      setModalMode(null);
-    } catch (err) {
-      console.error("TeamManagement: editMember error:", err);
-      setSubmitError(err?.message || "Failed to save changes.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // ── Toggle active/inactive ──────────────────────────────────────────────────
-  const handleToggleActive = async () => {
-    if (!deactivateTarget) return;
-    setDeactivateProcessing(true);
-    try {
-      await updateDoc(doc(db, COLLECTIONS.USERS, deactivateTarget.id), {
-        isActive: deactivateTarget.isActive === false, // flip
-        updatedAt: serverTimestamp(),
-      });
-      await loadMembers();
-    } catch (err) {
-      console.error("TeamManagement: toggleActive error:", err);
-    } finally {
-      setDeactivateProcessing(false);
-      setDeactivateTarget(null);
-    }
-  };
-
-  // ── Table column widths ─────────────────────────────────────────────────────
-  const COL = {
-    member: "1fr",
-    role: "140px",
-    status: "110px",
-    lastActive: "130px",
-    actions: "96px",
-  };
-
-  const headerCellStyle = {
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.semibold,
-    color: COLORS.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  return (
-    <div
-      style={{
-        backgroundColor: COLORS.background,
-        minHeight: "calc(100vh - 60px)",
-        padding: `${SPACING["2xl"]} ${SPACING["2xl"]}`,
-        fontFamily: FONTS.family,
-        boxSizing: "border-box",
-      }}
-    >
+  return(
+    <div style={{backgroundColor:C.bg,minHeight:"calc(100vh - 56px)",padding:"28px",fontFamily:FB,boxSizing:"border-box"}}>
       <style>{`
-        @keyframes tirasSpinKf { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .tiras-row:hover { background-color: ${COLORS.surfaceHover} !important; }
-        .tiras-action-btn { opacity: 0; transition: opacity 0.15s ease; }
-        .tiras-row:hover .tiras-action-btn { opacity: 1; }
-        select option { background-color: ${COLORS.surface}; color: ${COLORS.textPrimary}; }
+        @keyframes v2Shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+        @keyframes v2FadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes v2SlideIn{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes v2Spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        .tm-row:hover{background-color:${C.surfaceHov} !important;}
+        .tm-act{opacity:0;transition:opacity 0.15s ease;}
+        .tm-row:hover .tm-act{opacity:1;}
+        select option{background:${C.surface};color:${C.text};}
+        @media(max-width:640px){.tm-table{display:none !important;}.tm-cards{display:flex !important;}}
       `}</style>
 
-      {/* ── Page Header ──────────────────────────────────────────────────────── */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: SPACING.base,
-          marginBottom: SPACING["2xl"],
-        }}
-      >
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"12px",marginBottom:"24px",animation:"v2FadeUp 0.3s ease"}}>
         <div>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: FONTS.size["4xl"],
-              fontWeight: FONTS.weight.bold,
-              color: COLORS.textPrimary,
-              letterSpacing: "-0.5px",
-              lineHeight: 1.1,
-            }}
-          >
-            Team Management
-          </h1>
-          <p
-            style={{
-              margin: `${SPACING.xs} 0 0`,
-              fontSize: FONTS.size.base,
-              color: COLORS.textSecondary,
-            }}
-          >
-            Add members, assign roles, and manage access to your CRM.
-          </p>
+          <h1 style={{margin:0,fontFamily:FH,fontSize:"clamp(24px,3vw,36px)",fontWeight:700,color:C.text,letterSpacing:"-0.5px"}}>Team Management</h1>
+          <p style={{margin:"6px 0 0",fontSize:"14px",color:C.sub}}>Add members, assign roles, manage access.</p>
         </div>
-
-        <div style={{ display: "flex", gap: SPACING.sm, alignItems: "center" }}>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing || loading}
-            style={{
-              ...STYLES.buttonSecondary,
-              display: "flex",
-              alignItems: "center",
-              gap: SPACING.xs,
-              padding: `${SPACING.sm} ${SPACING.md}`,
-              opacity: refreshing || loading ? 0.4 : 1,
-            }}
-          >
-            <RiRefreshLine
-              size={15}
-              style={{
-                animation: refreshing
-                  ? "tirasSpinKf 0.7s linear infinite"
-                  : "none",
-              }}
-            />
-          </button>
-
-          <button
-            onClick={openAddModal}
-            style={{
-              ...STYLES.buttonPrimary,
-              display: "flex",
-              alignItems: "center",
-              gap: SPACING.xs,
-            }}
-          >
-            <RiAddLine size={17} />
-            Add Member
-          </button>
-        </div>
+        <button onClick={openAdd} style={{backgroundColor:C.gold,color:"#000",border:"none",borderRadius:R.md,fontFamily:FB,fontSize:"14px",fontWeight:700,padding:"10px 18px",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px",minHeight:"44px"}}>
+          <RiAddLine size={16}/>Add Member
+        </button>
       </div>
 
-      {/* ── Mini Stats ───────────────────────────────────────────────────────── */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-          gap: SPACING.md,
-          marginBottom: SPACING.xl,
-        }}
-      >
-        <MiniStat icon={RiTeamLine} iconColor={COLORS.info} label="Total Members" value={miniStats.total} loading={loading} />
-        <MiniStat icon={RiCheckboxCircleLine} iconColor={COLORS.success} label="Active Members" value={miniStats.active} loading={loading} />
-        <MiniStat icon={RiShieldUserLine} iconColor={COLORS.primary} label="Managers" value={miniStats.managers} loading={loading} />
-        <MiniStat icon={RiUserLine} iconColor={COLORS.accent} label="Agents" value={miniStats.agents} loading={loading} />
+      {/* Mini stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:"12px",marginBottom:"20px",animation:"v2FadeUp 0.3s ease 0.05s both"}}>
+        <MiniStat icon={RiTeamLine} ic={C.info} label="Total Members" value={miniStats.total} loading={loading}/>
+        <MiniStat icon={RiCheckboxCircleLine} ic={C.success} label="Active" value={miniStats.active} loading={loading}/>
+        <MiniStat icon={RiShieldUserLine} ic={C.gold} label="Managers" value={miniStats.managers} loading={loading}/>
+        <MiniStat icon={RiUserLine} ic={C.info} label="Agents" value={miniStats.agents} loading={loading}/>
       </div>
 
-      {/* ── Search + Filter Row ───────────────────────────────────────────────── */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: SPACING.md,
-          marginBottom: SPACING.base,
-          flexWrap: "wrap",
-        }}
-      >
-        {/* Search */}
-        <div style={{ position: "relative", flex: "1 1 240px", minWidth: "200px" }}>
-          <RiSearchLine
-            size={16}
-            color={COLORS.textMuted}
-            style={{
-              position: "absolute",
-              left: SPACING.md,
-              top: "50%",
-              transform: "translateY(-50%)",
-              pointerEvents: "none",
-            }}
-          />
-          <input
-            type="text"
-            placeholder="Search by name or email…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              ...STYLES.input,
-              paddingLeft: "36px",
-              maxWidth: "360px",
-            }}
-          />
+      {/* Search + Filter */}
+      <div style={{display:"flex",gap:"10px",marginBottom:"14px",flexWrap:"wrap",alignItems:"center",animation:"v2FadeUp 0.3s ease 0.1s both"}}>
+        <div style={{position:"relative",flex:"1 1 200px",minWidth:"180px"}}>
+          <RiSearchLine size={14} color={C.sub} style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}/>
+          <input type="text" placeholder="Search name or email…" value={search} onChange={e=>setSearch(e.target.value)} style={{width:"100%",boxSizing:"border-box",backgroundColor:C.bg,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"10px 14px 10px 34px",color:C.text,fontFamily:FB,fontSize:"14px",outline:"none"}}/>
         </div>
-
-        {/* Role filter tabs */}
-        <div
-          style={{
-            display: "flex",
-            backgroundColor: COLORS.surface,
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: RADIUS.md,
-            padding: "3px",
-            gap: "2px",
-          }}
-        >
-          {FILTER_TABS.map((tab) => {
-            const active = roleFilter === tab.value;
-            return (
-              <button
-                key={tab.value}
-                onClick={() => setRoleFilter(tab.value)}
-                style={{
-                  background: active ? COLORS.primary : "transparent",
-                  border: "none",
-                  borderRadius: RADIUS.base,
-                  color: active ? "#fff" : COLORS.textSecondary,
-                  fontSize: FONTS.size.sm,
-                  fontWeight: active
-                    ? FONTS.weight.semibold
-                    : FONTS.weight.regular,
-                  padding: `4px ${SPACING.md}`,
-                  cursor: "pointer",
-                  transition: TRANSITIONS.fast,
-                  whiteSpace: "nowrap",
-                  fontFamily: FONTS.family,
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
+        <div style={{display:"flex",backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.md,padding:"3px",gap:"2px"}}>
+          {FILTER_TABS.map(tab=>{const active=roleFilter===tab.v;return(<button key={tab.v} onClick={()=>setRoleFilter(tab.v)} style={{background:active?C.gold:"transparent",border:"none",borderRadius:R.sm,color:active?"#000":C.sub,fontFamily:FB,fontSize:"13px",fontWeight:active?700:400,padding:"5px 14px",cursor:"pointer",transition:TR,whiteSpace:"nowrap",minHeight:"34px"}}>{tab.l}</button>);})}
         </div>
-
-        {/* Result count */}
-        {!loading && (
-          <span
-            style={{ fontSize: FONTS.size.sm, color: COLORS.textMuted, marginLeft: "auto" }}
-          >
-            {filteredMembers.length} member{filteredMembers.length !== 1 ? "s" : ""}
-          </span>
-        )}
+        {!loading&&<span style={{fontSize:"13px",color:C.sub,marginLeft:"auto"}}>{filtered.length} member{filtered.length!==1?"s":""}</span>}
       </div>
 
-      {/* ── Table ────────────────────────────────────────────────────────────── */}
-      <div
-        style={{
-          backgroundColor: COLORS.surface,
-          border: `1px solid ${COLORS.border}`,
-          borderRadius: RADIUS.lg,
-          overflow: "hidden",
-        }}
-      >
-        {/* Table Header */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: `${COL.member} ${COL.role} ${COL.status} ${COL.lastActive} ${COL.actions}`,
-            padding: `${SPACING.sm} ${SPACING.lg}`,
-            backgroundColor: COLORS.surfaceActive,
-            borderBottom: `1px solid ${COLORS.border}`,
-            gap: SPACING.base,
-            alignItems: "center",
-          }}
-        >
-          <div style={headerCellStyle}>Member</div>
-          <div style={headerCellStyle}>Role</div>
-          <div style={headerCellStyle}>Status</div>
-          <div style={headerCellStyle}>Last Active</div>
-          <div style={{ ...headerCellStyle, textAlign: "right" }}>Actions</div>
+      {/* Desktop table */}
+      <div className="tm-table" style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,overflow:"hidden",animation:"v2FadeUp 0.3s ease 0.15s both"}}>
+        <div style={{display:"grid",gridTemplateColumns:COLS,padding:"10px 20px",backgroundColor:"rgba(255,255,255,0.02)",borderBottom:`1px solid ${C.border}`,gap:"12px",alignItems:"center"}}>
+          {["","Member","Role","Status","Last Active",""].map((h,i)=>(<div key={i} style={{fontFamily:FB,fontSize:"10px",fontWeight:600,color:C.sub,textTransform:"uppercase",letterSpacing:"0.08em",textAlign:i===5?"right":"left"}}>{h}</div>))}
         </div>
 
-        {/* Loading skeleton */}
-        {loading && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: SPACING["5xl"],
-              flexDirection: "column",
-              gap: SPACING.md,
-            }}
-          >
-            <RiLoader4Line
-              size={28}
-              color={COLORS.textMuted}
-              style={{ animation: "tirasSpinKf 1s linear infinite" }}
-            />
-            <span style={{ fontSize: FONTS.size.sm, color: COLORS.textMuted }}>
-              Loading team…
-            </span>
-          </div>
-        )}
+        {loading&&(<div style={{padding:"48px",textAlign:"center"}}><RiLoader4Line size={24} color={C.sub} style={{animation:"v2Spin 1s linear infinite"}}/><div style={{fontFamily:FB,fontSize:"13px",color:C.sub,marginTop:"10px"}}>Loading team…</div></div>)}
+        {!loading&&filtered.length===0&&(<div style={{padding:"48px",textAlign:"center"}}><RiUserSettingsLine size={32} color={C.sub} style={{marginBottom:"12px"}}/><div style={{fontFamily:FH,fontSize:"16px",fontWeight:700,color:C.text,marginBottom:"6px"}}>{search||roleFilter!=="all"?"No members match":"No team members yet"}</div><div style={{fontFamily:FB,fontSize:"13px",color:C.sub}}>{search||roleFilter!=="all"?"Try clearing filters":"Click Add Member to get started."}</div></div>)}
 
-        {/* Empty state */}
-        {!loading && filteredMembers.length === 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: SPACING["5xl"],
-              gap: SPACING.md,
-            }}
-          >
-            <div
-              style={{
-                width: "52px",
-                height: "52px",
-                borderRadius: RADIUS.xl,
-                backgroundColor: COLORS.primaryMuted,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <RiUserSettingsLine size={24} color={COLORS.primary} />
+        {!loading&&filtered.map((m,idx)=>{const isSelf=m.id===currentUser?.uid;const isInactive=m.isActive===false;return(
+          <div key={m.id} className="tm-row" style={{display:"grid",gridTemplateColumns:COLS,padding:"12px 20px",borderBottom:idx<filtered.length-1?`1px solid ${C.border}`:"none",gap:"12px",alignItems:"center",backgroundColor:C.surface,transition:TR,opacity:isInactive?0.5:1}}>
+            <div style={{display:"flex",alignItems:"center"}}><Avatar name={m.displayName||m.email} size={34}/></div>
+            <div style={{minWidth:0}}>
+              <div style={{fontFamily:FB,fontSize:"14px",fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"6px"}}>{m.displayName||"—"}{isSelf&&<span style={{fontSize:"11px",color:C.gold}}>(You)</span>}</div>
+              <div style={{fontFamily:FB,fontSize:"12px",color:C.sub,display:"flex",alignItems:"center",gap:"3px",marginTop:"2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}><RiMailLine size={10}/>{m.email}</div>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <div
-                style={{
-                  fontSize: FONTS.size.lg,
-                  fontWeight: FONTS.weight.semibold,
-                  color: COLORS.textPrimary,
-                  marginBottom: SPACING.xs,
-                }}
-              >
-                {searchQuery || roleFilter !== "all"
-                  ? "No members match your filters"
-                  : "No team members yet"}
-              </div>
-              <div style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary }}>
-                {searchQuery || roleFilter !== "all"
-                  ? "Try adjusting your search or filter."
-                  : 'Click "Add Member" to invite your first agent or manager.'}
-              </div>
+            <div><RoleBadge role={m.role}/></div>
+            <div><StatusBadge active={m.isActive}/></div>
+            <div style={{fontFamily:FB,fontSize:"13px",color:C.sub}}>{lastActive(m.lastLoginAt)}</div>
+            <div style={{display:"flex",justifyContent:"flex-end",gap:"5px"}}>
+              <button className="tm-act" onClick={()=>openEdit(m)} title="Edit" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:R.sm,color:C.sub,cursor:"pointer",padding:"6px",display:"flex",alignItems:"center",minWidth:"32px",justifyContent:"center"}}><RiEditLine size={13}/></button>
+              {!isSelf&&(<button className="tm-act" onClick={()=>setDeactivateTarget(m)} title={isInactive?"Reactivate":"Deactivate"} style={{background:"none",border:`1px solid ${isInactive?C.success+"50":C.red+"50"}`,borderRadius:R.sm,color:isInactive?C.success:C.red,cursor:"pointer",padding:"6px",display:"flex",alignItems:"center",minWidth:"32px",justifyContent:"center"}}>{isInactive?<RiCheckboxCircleLine size={13}/>:<RiIndeterminateCircleLine size={13}/>}</button>)}
             </div>
           </div>
-        )}
-
-        {/* Rows */}
-        {!loading &&
-          filteredMembers.map((member, idx) => {
-            const isSelf = member.id === currentUser?.uid;
-            const isInactive = member.isActive === false;
-
-            return (
-              <div
-                key={member.id}
-                className="tiras-row"
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `${COL.member} ${COL.role} ${COL.status} ${COL.lastActive} ${COL.actions}`,
-                  padding: `${SPACING.md} ${SPACING.lg}`,
-                  borderBottom:
-                    idx < filteredMembers.length - 1
-                      ? `1px solid ${COLORS.border}`
-                      : "none",
-                  gap: SPACING.base,
-                  alignItems: "center",
-                  transition: TRANSITIONS.fast,
-                  opacity: isInactive ? 0.55 : 1,
-                  backgroundColor: COLORS.surface,
-                }}
-              >
-                {/* Member cell */}
-                <div style={{ display: "flex", alignItems: "center", gap: SPACING.md, minWidth: 0 }}>
-                  <MemberAvatar name={member.displayName || member.email} />
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: FONTS.size.base,
-                        fontWeight: FONTS.weight.semibold,
-                        color: COLORS.textPrimary,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: SPACING.xs,
-                      }}
-                    >
-                      {member.displayName || "—"}
-                      {isSelf && (
-                        <span
-                          style={{
-                            fontSize: FONTS.size.xs,
-                            color: COLORS.accent,
-                            fontWeight: FONTS.weight.regular,
-                          }}
-                        >
-                          (You)
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: FONTS.size.sm,
-                        color: COLORS.textSecondary,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "4px",
-                        marginTop: "1px",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      <RiMailLine size={11} />
-                      {member.email}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Role */}
-                <div>
-                  <RoleBadge role={member.role} />
-                </div>
-
-                {/* Status */}
-                <div>
-                  <StatusBadge isActive={member.isActive} />
-                </div>
-
-                {/* Last Active */}
-                <div
-                  style={{
-                    fontSize: FONTS.size.sm,
-                    color: COLORS.textSecondary,
-                  }}
-                >
-                  {formatLastActive(member.lastLoginAt)}
-                </div>
-
-                {/* Actions */}
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "flex-end",
-                    gap: "6px",
-                  }}
-                >
-                  {/* Edit */}
-                  <button
-                    className="tiras-action-btn"
-                    onClick={() => openEditModal(member)}
-                    title="Edit member"
-                    style={{
-                      background: "none",
-                      border: `1px solid ${COLORS.border}`,
-                      borderRadius: RADIUS.base,
-                      color: COLORS.textSecondary,
-                      cursor: "pointer",
-                      padding: "6px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <RiEditLine size={14} />
-                  </button>
-
-                  {/* Activate / Deactivate */}
-                  {!isSelf && (
-                    <button
-                      className="tiras-action-btn"
-                      onClick={() => setDeactivateTarget(member)}
-                      title={isInactive ? "Reactivate" : "Deactivate"}
-                      style={{
-                        background: "none",
-                        border: `1px solid ${
-                          isInactive ? COLORS.success + "50" : COLORS.danger + "50"
-                        }`,
-                        borderRadius: RADIUS.base,
-                        color: isInactive ? COLORS.success : COLORS.danger,
-                        cursor: "pointer",
-                        padding: "6px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      {isInactive ? (
-                        <RiCheckboxCircleLine size={14} />
-                      ) : (
-                        <RiIndeterminateCircleLine size={14} />
-                      )}
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+        );})}
       </div>
 
-      {/* ── Modals ───────────────────────────────────────────────────────────── */}
-      {modalMode && (
-        <AddEditModal
-          mode={modalMode}
-          formData={formData}
-          setFormData={setFormData}
-          formErrors={formErrors}
-          submitError={submitError}
-          submitting={submitting}
-          managers={managers}
-          onClose={closeModal}
-          onSubmit={modalMode === "add" ? handleAdd : handleEdit}
-        />
-      )}
+      {/* Mobile cards */}
+      <div className="tm-cards" style={{display:"none",flexDirection:"column",gap:"10px",animation:"v2FadeUp 0.3s ease 0.15s both"}}>
+        {loading&&[1,2,3].map(i=>(<div key={i} style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,padding:"16px",display:"flex",flexDirection:"column",gap:"10px"}}><SK w="60%" h="18px"/><SK w="80%" h="14px"/><SK w="40%" h="14px"/></div>))}
+        {!loading&&filtered.map(m=>{const isSelf=m.id===currentUser?.uid;const isInactive=m.isActive===false;return(
+          <div key={m.id} style={{backgroundColor:C.surface,border:`1px solid ${C.border}`,borderRadius:R.lg,padding:"16px",opacity:isInactive?0.55:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"12px"}}>
+              <Avatar name={m.displayName||m.email} size={42}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:FB,fontSize:"15px",fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.displayName||"—"}{isSelf&&<span style={{fontSize:"11px",color:C.gold,marginLeft:"6px"}}>(You)</span>}</div>
+                <div style={{fontFamily:FB,fontSize:"12px",color:C.sub,marginTop:"2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.email}</div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"12px"}}><RoleBadge role={m.role}/><StatusBadge active={m.isActive}/></div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>openEdit(m)} style={{flex:1,backgroundColor:"transparent",border:`1px solid ${C.border}`,borderRadius:R.md,color:C.text,fontFamily:FB,fontSize:"13px",fontWeight:500,padding:"10px 0",cursor:"pointer",minHeight:"44px"}}>Edit</button>
+              {!isSelf&&(<button onClick={()=>setDeactivateTarget(m)} style={{flex:1,backgroundColor:isInactive?C.successMuted:C.redMuted,border:`1px solid ${isInactive?C.success+"50":C.red+"50"}`,borderRadius:R.md,color:isInactive?C.success:C.red,fontFamily:FB,fontSize:"13px",fontWeight:600,padding:"10px 0",cursor:"pointer",minHeight:"44px"}}>{isInactive?"Reactivate":"Deactivate"}</button>)}
+            </div>
+          </div>
+        );})}
+      </div>
 
-      {deactivateTarget && (
-        <DeactivateDialog
-          member={deactivateTarget}
-          onCancel={() => setDeactivateTarget(null)}
-          onConfirm={handleToggleActive}
-          processing={deactivateProcessing}
-        />
-      )}
+      {modalMode&&<AddEditModal mode={modalMode} formData={formData} setFormData={setFormData} formErrors={formErrors} submitError={submitError} submitting={submitting} managers={managers} onClose={closeModal} onSubmit={modalMode==="add"?handleAdd:handleEdit}/>}
+      {deactivateTarget&&<DeactivateDialog member={deactivateTarget} onCancel={()=>setDeactivateTarget(null)} onConfirm={handleToggleActive} processing={deactivateProcessing}/>}
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
     </div>
   );
 };

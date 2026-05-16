@@ -1,367 +1,435 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   collection,
-  addDoc,
-  doc,
-  getDoc,
   query,
   where,
   orderBy,
   onSnapshot,
+  addDoc,
   updateDoc,
+  doc,
   serverTimestamp,
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, COLLECTIONS } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 
-// ── Icon primitive ───────────────────────────────────────────────────────────
-const Icon = ({ d, size = 18, color = "currentColor" }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke={color}
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
+/* ─────────────────────────────────────────────────────────────────────────────
+   TIRAS CRM V2 — SupportTicketCreateView
+   Theme: Obsidian Gold  |  Route: /tickets  |  All roles
+   Views: List → Create form → Detail (activity log + stage change)
+   Real-time onSnapshot · Role-aware · Toast on every write · Skeleton
+───────────────────────────────────────────────────────────────────────────── */
+
+const C = {
+  bg:         "#121212",
+  surface:    "#1A1A1B",
+  surfaceHov: "#222223",
+  border:     "#2A2A2B",
+  gold:       "#D4AF37",
+  goldMuted:  "rgba(212,175,55,0.12)",
+  red:        "#E63946",
+  redMuted:   "rgba(230,57,70,0.12)",
+  green:      "#10B981",
+  greenMuted: "rgba(16,185,129,0.12)",
+  blue:       "#3B82F6",
+  blueMuted:  "rgba(59,130,246,0.12)",
+  amber:      "#F59E0B",
+  text:       "#F5F5F5",
+  textSec:    "#9A9A9A",
+  textMuted:  "#555555",
+};
+
+// ── Global styles ─────────────────────────────────────────────────────────────
+const STYLE_ID = "tiras-v2-stcv";
+if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
+  const s = document.createElement("style");
+  s.id = STYLE_ID;
+  s.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600;700&display=swap');
+
+    @keyframes stcv-up    { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes stcv-shimm { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+    @keyframes stcv-toast { from{transform:translateX(110%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+    .stcv-up   { animation:stcv-up .42s ease both; }
+    .stcv-skel {
+      background:linear-gradient(90deg,#1A1A1B 25%,#222223 50%,#1A1A1B 75%);
+      background-size:400px 100%; animation:stcv-shimm 1.4s infinite; border-radius:6px;
+    }
+    .stcv-card { transition:background .14s,transform .14s,border-color .14s; cursor:pointer; }
+    .stcv-card:hover { background:#222223 !important; transform:translateX(3px); }
+    .stcv-input:focus { border-color:#D4AF37 !important; outline:none; box-shadow:0 0 0 3px rgba(212,175,55,0.12); }
+    .stcv-btn-gold:hover   { filter:brightness(1.08); transform:translateY(-1px); }
+    .stcv-btn-gold         { transition:all .15s; }
+    .stcv-btn-ghost:hover  { border-color:#D4AF37 !important; color:#D4AF37 !important; }
+    .stcv-btn-ghost        { transition:all .15s; }
+    .stcv-filter:hover     { color:#D4AF37 !important; }
+    .stcv-filter           { transition:all .14s; }
+    .stcv-stage-opt:hover  { background:#222223 !important; }
+    .stcv-toast {
+      position:fixed; bottom:24px; right:24px; z-index:9999;
+      display:flex; align-items:center; gap:10px; padding:12px 18px;
+      border-radius:10px; font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600;
+      box-shadow:0 8px 32px rgba(0,0,0,.5); animation:stcv-toast .3s ease both;
+    }
+    @media(max-width:640px){
+      .stcv-two-col { grid-template-columns:1fr !important; }
+      .stcv-filters { overflow-x:auto; scrollbar-width:none; flex-wrap:nowrap !important; }
+      .stcv-detail-grid { grid-template-columns:1fr !important; }
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+// ── Icon ──────────────────────────────────────────────────────────────────────
+const Ic = ({ d, s = 16, c = "currentColor", fill = "none" }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill={fill}
+    stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+    style={{ flexShrink: 0 }} aria-hidden="true">
     <path d={d} />
   </svg>
 );
 
-const ICONS = {
-  ticket:     "M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z",
-  plus:       "M12 5v14M5 12h14",
-  x:          "M18 6L6 18M6 6l12 12",
-  chevDown:   "M6 9l6 6 6-6",
-  chevRight:  "M9 18l6-6-6-6",
-  chevLeft:   "M15 18l-6-6 6-6",
-  user:       "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
-  link:       "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
-  phone:      "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13 19.79 19.79 0 0 1 1.61 4.37 2 2 0 0 1 3.6 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9.91a16 16 0 0 0 6.18 6.18",
-  clock:      "M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zM12 6v6l4 2",
-  alert:      "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
-  check:      "M20 6L9 17l-5-5",
-  send:       "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
-  mic:        "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8",
-  filter:     "M22 3H2l8 9.46V19l4 2v-8.54L22 3z",
-  inbox:      "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
-  arrowUp:    "M12 19V5M5 12l7-7 7 7",
-  edit:       "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+const D = {
+  ticket:  "M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z",
+  plus:    "M12 5v14M5 12h14",
+  back:    "M19 12H5M12 19l-7-7 7-7",
+  check:   "M20 6L9 17l-5-5",
+  alert:   "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
+  clock:   "M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zM12 6v6l4 2",
+  user:    "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  link:    "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+  mic:     "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8",
+  send:    "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
+  chevD:   "M6 9l6 6 6-6",
+  chevR:   "M9 18l6-6-6-6",
+  inbox:   "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+  tag:     "M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01",
+  message: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
 };
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
+const STAGES = [
+  { key: "Open",        color: C.blue   },
+  { key: "Assigned",    color: C.amber  },
+  { key: "In Progress", color: C.gold   },
+  { key: "Resolved",    color: C.green  },
+  { key: "Closed",      color: C.textMuted },
+];
+
 const PRIORITIES = [
-  { value: "low",      label: "Low",      color: "#5AB45A" },
-  { value: "medium",   label: "Medium",   color: "#F2A65A" },
-  { value: "high",     label: "High",     color: "#E05C5C" },
+  { value: "low",      label: "Low",      color: C.green },
+  { value: "medium",   label: "Medium",   color: C.amber },
+  { value: "high",     label: "High",     color: C.red   },
   { value: "critical", label: "Critical", color: "#FF3B3B" },
 ];
 
-const STAGES = [
-  { key: "Open",        color: "#5AB4F2" },
-  { key: "Assigned",    color: "#F2A65A" },
-  { key: "In Progress", color: "#B65E3C" },
-  { key: "Resolved",    color: "#5AB45A" },
-  { key: "Closed",      color: "#666"    },
+const CATEGORIES = [
+  "Call Issue", "Lead Data Error", "Payment Problem",
+  "Access / Permission", "Recording Missing", "App Bug", "Other",
 ];
 
-const CATEGORIES = [
-  "Call Issue",
-  "Lead Data Error",
-  "Payment Problem",
-  "Access / Permission",
-  "Recording Missing",
-  "App Bug",
-  "Other",
-];
+const MANAGER_ROLES = ["manager", "company_admin", "platform_owner", "support_agent"];
 
 const VIEW = { LIST: "list", CREATE: "create", DETAIL: "detail" };
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-const timeAgo = (ts) => {
-  if (!ts) return "—";
-  const d = ts?.toDate ? ts.toDate() : new Date(ts);
-  const diff = Math.floor((Date.now() - d) / 1000);
-  if (diff < 60)   return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-};
-
-const priorityConfig = (v) =>
-  PRIORITIES.find((p) => p.value === v) ?? PRIORITIES[1];
-
-const stageConfig = (k) =>
-  STAGES.find((s) => s.key === k) ?? STAGES[0];
-
-const isOverdue = (ts) => {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const stageConf  = (k) => STAGES.find((s) => s.key === k)    ?? STAGES[0];
+const prioConf   = (v) => PRIORITIES.find((p) => p.value === v) ?? PRIORITIES[1];
+const isOverdue  = (ts) => {
   if (!ts) return false;
   const d = ts?.toDate ? ts.toDate() : new Date(ts);
   return (Date.now() - d) / 1000 > 86400;
 };
+const timeAgo = (ts) => {
+  if (!ts) return "—";
+  const d = ts?.toDate ? ts.toDate() : new Date(ts);
+  const diff = Math.floor((Date.now() - d) / 1000);
+  if (diff < 60)    return "just now";
+  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+};
+const fmtDateTime = (ts) => {
+  if (!ts) return "—";
+  const d = ts?.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+};
 
-// ── Main Component ───────────────────────────────────────────────────────────
-export const SupportTicketCreateView = () => {
-  const { currentUser, userProfile } = useAuth();
-  const [view,    setView]    = useState(VIEW.LIST);
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(null);
-  const [filterStage, setFilterStage] = useState("all");
+// ── Toast hook ────────────────────────────────────────────────────────────────
+const useToast = () => {
+  const [t, setT] = useState(null);
+  const show = useCallback((msg, type = "success") => {
+    setT({ msg, type });
+    setTimeout(() => setT(null), 3200);
+  }, []);
+  return [t, show];
+};
 
-  // ── Live ticket list ─────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-
-    const isManager = ["manager", "company_admin", "platform_owner"].includes(
-      userProfile?.role
-    );
-
-    const q = isManager
-      ? query(
-          collection(db, "tickets"),
-          where("companyId", "==", userProfile?.companyId ?? ""),
-          orderBy("createdAt", "desc")
-        )
-      : query(
-          collection(db, "tickets"),
-          where("raisedBy", "==", currentUser.uid),
-          orderBy("createdAt", "desc")
-        );
-
-    const unsub = onSnapshot(q, (snap) => {
-      setTickets(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    });
-    return () => unsub();
-  }, [currentUser?.uid, userProfile?.role]);
-
-  const filtered =
-    filterStage === "all"
-      ? tickets
-      : tickets.filter((t) => t.stage === filterStage);
-
-  const openCount = tickets.filter(
-    (t) => t.stage !== "Resolved" && t.stage !== "Closed"
-  ).length;
-
-  const openDetail = async (id) => {
-    const t = tickets.find((x) => x.id === id);
-    if (t) { setSelected(t); setView(VIEW.DETAIL); }
-  };
-
-  if (view === VIEW.CREATE)
-    return (
-      <CreateForm
-        currentUser={currentUser}
-        userProfile={userProfile}
-        onBack={() => setView(VIEW.LIST)}
-        onSuccess={() => setView(VIEW.LIST)}
-      />
-    );
-
-  if (view === VIEW.DETAIL && selected)
-    return (
-      <TicketDetail
-        ticket={selected}
-        currentUser={currentUser}
-        userProfile={userProfile}
-        onBack={() => { setSelected(null); setView(VIEW.LIST); }}
-      />
-    );
-
-  // ── List view ────────────────────────────────────────────────────────────
+// ── Shared primitives ─────────────────────────────────────────────────────────
+const Toast = ({ t }) => {
+  if (!t) return null;
+  const err = t.type === "error";
   return (
-    <div style={styles.page}>
-      {/* Header */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <div style={styles.headerIconWrap}>
-            <Icon d={ICONS.ticket} size={20} color="#F2A65A" />
-          </div>
-          <div>
-            <h1 style={styles.title}>Support Tickets</h1>
-            <p style={styles.subtitle}>
-              {openCount > 0
-                ? `${openCount} open ticket${openCount !== 1 ? "s" : ""}`
-                : "No open tickets"}
-            </p>
-          </div>
-        </div>
-        <button style={styles.newBtn} onClick={() => setView(VIEW.CREATE)}>
-          <Icon d={ICONS.plus} size={15} color="#121212" />
-          New Ticket
-        </button>
-      </div>
-
-      {/* Stage filter */}
-      <div style={styles.filterRow}>
-        {["all", ...STAGES.map((s) => s.key)].map((s) => {
-          const active = filterStage === s;
-          const cfg = s !== "all" ? stageConfig(s) : null;
-          const count =
-            s === "all"
-              ? tickets.length
-              : tickets.filter((t) => t.stage === s).length;
-          return (
-            <button
-              key={s}
-              onClick={() => setFilterStage(s)}
-              style={{
-                ...styles.filterBtn,
-                background: active ? "#1E1510" : "#1A1A1A",
-                border: `1px solid ${active ? "#B65E3C55" : "#2A2A2A"}`,
-                color: active ? (cfg?.color ?? "#F2A65A") : "#888",
-              }}
-            >
-              {s === "all" ? "All" : s}
-              {count > 0 && (
-                <span
-                  style={{
-                    ...styles.filterCount,
-                    background: active ? "#B65E3C22" : "#222",
-                    color: active ? (cfg?.color ?? "#F2A65A") : "#666",
-                  }}
-                >
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* List */}
-      {loading ? (
-        <LoadingSkeleton />
-      ) : filtered.length === 0 ? (
-        <EmptyTickets onNew={() => setView(VIEW.CREATE)} />
-      ) : (
-        <div style={styles.list}>
-          {filtered.map((t) => (
-            <TicketCard
-              key={t.id}
-              ticket={t}
-              onClick={() => openDetail(t.id)}
-            />
-          ))}
-        </div>
-      )}
+    <div className="stcv-toast" style={{
+      background: err ? "#2A1215" : "#0F2A1E",
+      border: `1px solid ${err ? C.red : C.green}44`,
+      color: err ? C.red : C.green,
+    }}>
+      <Ic d={err ? D.alert : D.check} s={14} c={err ? C.red : C.green} />
+      {t.msg}
     </div>
   );
 };
 
-// ── Ticket Card ──────────────────────────────────────────────────────────────
-const TicketCard = ({ ticket: t, onClick }) => {
-  const [hovered, setHovered] = useState(false);
-  const pri = priorityConfig(t.priority);
-  const stg = stageConfig(t.stage);
-  const overdue = isOverdue(t.createdAt) && !["Resolved","Closed"].includes(t.stage);
+const Label = ({ children, required }) => (
+  <label style={{
+    fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700,
+    color: C.textSec, textTransform: "uppercase", letterSpacing: "0.7px",
+    display: "block", marginBottom: 7,
+  }}>{children}{required && <span style={{ color: C.red, marginLeft: 3 }}>*</span>}</label>
+);
+
+const FieldErr = ({ msg }) =>
+  msg ? <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.red, marginTop: 5 }}>{msg}</p> : null;
+
+const TextInput = ({ icon, value, onChange, placeholder, error, disabled, multiline, rows = 4 }) => {
+  const base = {
+    width: "100%", boxSizing: "border-box",
+    padding: `10px 14px 10px ${icon ? "40px" : "14px"}`,
+    background: disabled ? C.surfaceHov : C.bg,
+    border: `1px solid ${error ? C.red + "88" : C.border}`,
+    borderRadius: 8, color: C.text,
+    fontFamily: "DM Sans, sans-serif", fontSize: 14,
+    transition: "border-color .15s",
+    resize: multiline ? "vertical" : undefined,
+    minHeight: multiline ? `${rows * 24}px` : undefined,
+  };
+  const inner = multiline
+    ? <textarea className="stcv-input" style={base} value={value} onChange={onChange} placeholder={placeholder} rows={rows} />
+    : <input    className="stcv-input" style={base} value={value} onChange={onChange} placeholder={placeholder} disabled={disabled} />;
+  return (
+    <div style={{ position: "relative" }}>
+      {icon && (
+        <span style={{ position: "absolute", left: 13, top: 12, pointerEvents: "none" }}>
+          <Ic d={icon} s={14} c={C.textMuted} />
+        </span>
+      )}
+      {inner}
+    </div>
+  );
+};
+
+// Custom select (dropdown)
+const Select = ({ value, options, onChange, colorFn }) => {
+  const [open, setOpen] = useState(false);
+  const cur = options.find((o) => (o.value ?? o) === value);
+  const label = cur?.label ?? cur ?? value;
+  const color = colorFn ? colorFn(value) : C.text;
 
   return (
-    <div
-      style={{
-        ...styles.card,
-        background: hovered ? "#1C1C1C" : "#1A1A1A",
-        borderLeft: `3px solid ${overdue ? "#E05C5C" : pri.color}`,
-        cursor: "pointer",
-        transform: hovered ? "translateX(3px)" : "none",
-        transition: "all 0.15s",
-      }}
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div style={styles.cardTop}>
-        <div style={styles.cardTopLeft}>
-          {overdue && (
-            <span style={styles.overdueTag}>
-              <Icon d={ICONS.alert} size={11} color="#E05C5C" />
-              Overdue
-            </span>
-          )}
-          <span
-            style={{
-              ...styles.stagePill,
-              background: `${stg.color}18`,
-              border: `1px solid ${stg.color}44`,
-              color: stg.color,
-            }}
-          >
-            {t.stage ?? "Open"}
-          </span>
-          <span
-            style={{
-              ...styles.priorityPill,
-              background: `${pri.color}18`,
-              color: pri.color,
-            }}
-          >
-            {pri.label}
-          </span>
+    <>
+      {open && <div style={{ position: "fixed", inset: 0, zIndex: 9 }} onClick={() => setOpen(false)} />}
+      <div style={{ position: "relative" }}>
+        <button onClick={() => setOpen((o) => !o)}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+            width: "100%", padding: "10px 14px", borderRadius: 8,
+            border: `1px solid ${C.border}`, background: C.bg,
+            color, fontFamily: "DM Sans, sans-serif", fontSize: 14,
+            cursor: "pointer", boxSizing: "border-box",
+          }}>
+          <span>{label}</span>
+          <Ic d={D.chevD} s={14} c={C.textMuted} />
+        </button>
+        {open && (
+          <div style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
+            background: "#1E1E1F", border: `1px solid ${C.border}`,
+            borderRadius: 8, zIndex: 10, overflow: "hidden",
+            boxShadow: "0 12px 40px rgba(0,0,0,.6)",
+          }}>
+            {options.map((opt) => {
+              const v = opt.value ?? opt;
+              const l = opt.label ?? opt;
+              const c = colorFn ? colorFn(v) : C.text;
+              return (
+                <button key={v} className="stcv-stage-opt"
+                  onClick={() => { onChange(v); setOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    width: "100%", padding: "10px 14px",
+                    background: "none", border: "none", cursor: "pointer",
+                    fontFamily: "DM Sans, sans-serif", fontSize: 13,
+                    color: c, textAlign: "left",
+                  }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: c, flexShrink: 0 }} />
+                  {l}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+};
+
+// Priority dot
+const PrioPill = ({ value }) => {
+  const p = prioConf(value);
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: "2px 9px", borderRadius: 99,
+      background: `${p.color}18`, border: `1px solid ${p.color}33`,
+      fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700, color: p.color,
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: p.color }} />
+      {p.label}
+    </span>
+  );
+};
+
+// Stage pill
+const StagePill = ({ stage }) => {
+  const cfg = stageConf(stage);
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: "2px 9px", borderRadius: 99,
+      background: `${cfg.color}18`, border: `1px solid ${cfg.color}33`,
+      fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700, color: cfg.color,
+    }}>{stage}</span>
+  );
+};
+
+// Overdue badge
+const OverdueBadge = () => (
+  <span style={{
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: "2px 8px", borderRadius: 99,
+    background: C.redMuted, border: `1px solid ${C.red}33`,
+    fontFamily: "DM Sans, sans-serif", fontSize: 10, fontWeight: 700, color: C.red,
+  }}>
+    <Ic d={D.clock} s={10} c={C.red} /> Overdue
+  </span>
+);
+
+// ── Skeleton ──────────────────────────────────────────────────────────────────
+const Skeleton = () => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    {[...Array(5)].map((_, i) => (
+      <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px" }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <div className="stcv-skel" style={{ height: 20, width: 70 }} />
+          <div className="stcv-skel" style={{ height: 20, width: 55 }} />
         </div>
-        <span style={styles.cardTime}>{timeAgo(t.createdAt)}</span>
+        <div className="stcv-skel" style={{ height: 14, width: "58%", marginBottom: 8 }} />
+        <div className="stcv-skel" style={{ height: 12, width: "80%" }} />
+      </div>
+    ))}
+  </div>
+);
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+const Empty = ({ onNew }) => (
+  <div style={{
+    display: "flex", flexDirection: "column", alignItems: "center",
+    padding: "80px 24px", gap: 14, textAlign: "center",
+  }}>
+    <div style={{
+      width: 70, height: 70, borderRadius: "50%",
+      background: C.goldMuted, border: `1px solid ${C.gold}30`,
+      display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6,
+    }}>
+      <Ic d={D.inbox} s={30} c={C.gold} />
+    </div>
+    <p style={{ fontFamily: "Playfair Display, serif", fontWeight: 700, fontSize: 17, color: C.text, margin: 0 }}>
+      No tickets yet
+    </p>
+    <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: C.textSec, maxWidth: 280, lineHeight: 1.6, margin: 0 }}>
+      Raise a ticket when you encounter a call issue, data problem, or anything that needs attention.
+    </p>
+    <button className="stcv-btn-gold" onClick={onNew}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 8,
+        padding: "10px 22px", minHeight: 44, borderRadius: 8, border: "none",
+        background: C.gold, color: "#000",
+        fontFamily: "DM Sans, sans-serif", fontSize: 14, fontWeight: 700, cursor: "pointer",
+      }}>
+      <Ic d={D.plus} s={14} c="#000" /> Raise first ticket
+    </button>
+  </div>
+);
+
+// ── Ticket card ───────────────────────────────────────────────────────────────
+const TicketCard = ({ ticket: t, onClick }) => {
+  const overdue = isOverdue(t.createdAt) && !["Resolved", "Closed"].includes(t.stage);
+  const prio    = prioConf(t.priority);
+  return (
+    <div className="stcv-card stcv-up"
+      onClick={onClick}
+      style={{
+        background: C.surface, borderRadius: 12, padding: "14px 40px 14px 16px",
+        border: `1px solid ${overdue ? C.red + "44" : C.border}`,
+        position: "relative",
+      }}>
+      {/* Top row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8, flexWrap: "wrap" }}>
+        {overdue && <OverdueBadge />}
+        <StagePill stage={t.stage ?? "Open"} />
+        <PrioPill value={t.priority} />
+        <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
+          {timeAgo(t.createdAt)}
+        </span>
       </div>
 
-      <p style={styles.cardSubject}>{t.subject}</p>
-
+      <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 15, fontWeight: 600, color: C.text, margin: "0 0 6px" }}>
+        {t.subject}
+      </p>
       {t.description && (
-        <p style={styles.cardDesc}>
-          {t.description.length > 110
-            ? t.description.slice(0, 110) + "…"
-            : t.description}
+        <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: C.textSec, margin: "0 0 10px", lineHeight: 1.5 }}>
+          {t.description.length > 100 ? t.description.slice(0, 100) + "…" : t.description}
         </p>
       )}
 
-      <div style={styles.cardMeta}>
-        <span style={styles.metaItem}>
-          <Icon d={ICONS.filter} size={12} color="#888" />
-          {t.category ?? "—"}
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
+          <Ic d={D.tag} s={11} c={C.textMuted} /> {t.category}
         </span>
         {t.linkedLeadName && (
-          <span style={styles.metaItem}>
-            <Icon d={ICONS.link} size={12} color="#888" />
-            {t.linkedLeadName}
+          <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
+            <Ic d={D.link} s={11} c={C.textMuted} /> {t.linkedLeadName}
           </span>
         )}
         {t.linkedRecordingId && (
-          <span style={styles.metaItem}>
-            <Icon d={ICONS.mic} size={12} color="#888" />
-            Recording linked
+          <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.gold, display: "flex", alignItems: "center", gap: 4 }}>
+            <Ic d={D.mic} s={11} c={C.gold} /> Recording linked
           </span>
         )}
-        <span style={styles.metaItem}>
-          <Icon d={ICONS.user} size={12} color="#888" />
-          {t.raisedByName ?? "You"}
+        <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center", gap: 4 }}>
+          <Ic d={D.user} s={11} c={C.textMuted} /> {t.raisedByName ?? "You"}
         </span>
       </div>
 
-      <Icon d={ICONS.chevRight} size={16} color="#444" style={{ position: "absolute", right: 16, top: "50%" }} />
+      <Ic d={D.chevR} s={16} c={C.textMuted} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)" }} />
     </div>
   );
 };
 
-// ── Create Form ──────────────────────────────────────────────────────────────
-const CreateForm = ({ currentUser, userProfile, onBack, onSuccess }) => {
+// ═══════════════════════════════════════════════════════════════════════════════
+// CREATE FORM
+// ═══════════════════════════════════════════════════════════════════════════════
+const CreateForm = ({ currentUser, userProfile, onBack, onSuccess, showToast }) => {
   const [form, setForm] = useState({
-    subject:          "",
-    description:      "",
-    category:         CATEGORIES[0],
-    priority:         "medium",
-    linkedLeadId:     "",
-    linkedLeadName:   "",
-    linkedRecordingId:"",
+    subject: "", description: "", category: CATEGORIES[0],
+    priority: "medium", linkedLeadId: "", linkedLeadName: "", linkedRecordingId: "",
   });
-  const [errors,  setErrors]  = useState({});
-  const [saving,  setSaving]  = useState(false);
-  const [catOpen, setCatOpen] = useState(false);
-  const [priOpen, setPriOpen] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
 
-  const set = (k) => (e) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const validate = () => {
     const e = {};
@@ -376,7 +444,7 @@ const CreateForm = ({ currentUser, userProfile, onBack, onSuccess }) => {
     setErrors({});
     setSaving(true);
     try {
-      await addDoc(collection(db, "tickets"), {
+      await addDoc(collection(db, COLLECTIONS.TICKETS), {
         subject:           form.subject.trim(),
         description:       form.description.trim(),
         category:          form.category,
@@ -385,188 +453,116 @@ const CreateForm = ({ currentUser, userProfile, onBack, onSuccess }) => {
         raisedBy:          currentUser.uid,
         raisedByName:      userProfile?.displayName ?? currentUser.email,
         companyId:         userProfile?.companyId ?? "",
-        linkedLeadId:      form.linkedLeadId.trim() || null,
-        linkedLeadName:    form.linkedLeadName.trim() || null,
-        linkedRecordingId: form.linkedRecordingId.trim() || null,
+        linkedLeadId:      form.linkedLeadId.trim()      || null,
+        linkedLeadName:    form.linkedLeadName.trim()     || null,
+        linkedRecordingId: form.linkedRecordingId.trim()  || null,
         createdAt:         serverTimestamp(),
         updatedAt:         serverTimestamp(),
-        timeline: [
-          {
-            action:    "Ticket created",
-            by:        userProfile?.displayName ?? currentUser.email,
-            timestamp: new Date().toISOString(),
-          },
-        ],
+        timeline: [{
+          action:    "Ticket created",
+          by:        userProfile?.displayName ?? currentUser.email,
+          timestamp: new Date().toISOString(),
+        }],
       });
+      showToast("Ticket raised successfully");
       onSuccess();
     } catch {
-      setErrors({ submit: "Failed to create ticket. Please try again." });
+      showToast("Failed to create ticket", "error");
     } finally {
       setSaving(false);
     }
   };
 
-  const selPriority = PRIORITIES.find((p) => p.value === form.priority);
-
   return (
-    <div style={styles.page}>
+    <div className="stcv-up">
       {/* Back header */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <button style={styles.backBtn} onClick={onBack}>
-            <Icon d={ICONS.chevLeft} size={16} color="#AAAAAA" />
-          </button>
-          <div style={styles.headerIconWrap}>
-            <Icon d={ICONS.plus} size={20} color="#F2A65A" />
-          </div>
-          <div>
-            <h1 style={styles.title}>New Ticket</h1>
-            <p style={styles.subtitle}>Describe the issue clearly</p>
-          </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <button className="stcv-btn-ghost" onClick={onBack}
+          style={{ width: 38, height: 38, borderRadius: 9, border: `1px solid ${C.border}`, background: "transparent", color: C.textSec, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+          <Ic d={D.back} s={16} c={C.textSec} />
+        </button>
+        <div>
+          <h1 style={{ fontFamily: "Playfair Display, serif", fontWeight: 700, fontSize: 20, color: C.text, margin: 0 }}>
+            New Support Ticket
+          </h1>
+          <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: C.textSec, margin: "3px 0 0" }}>
+            Describe the issue clearly — attach a recording if available
+          </p>
         </div>
       </div>
 
-      <div style={styles.panel}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
         {/* Subject */}
-        <FieldWrap label="Subject *" error={errors.subject}>
-          <input
-            style={{ ...styles.input, ...(errors.subject ? styles.inputError : {}) }}
-            placeholder="One-line summary of the issue"
-            value={form.subject}
-            onChange={set("subject")}
-            maxLength={120}
-          />
-        </FieldWrap>
+        <div>
+          <Label required>Subject</Label>
+          <TextInput value={form.subject} onChange={set("subject")} placeholder="One-line summary of the issue" error={errors.subject} />
+          <FieldErr msg={errors.subject} />
+        </div>
 
-        {/* Category + Priority row */}
-        <div style={styles.twoCol}>
-          {/* Category */}
-          <FieldWrap label="Category">
-            <div style={{ position: "relative" }}>
-              <button
-                style={styles.select}
-                onClick={() => { setCatOpen((o) => !o); setPriOpen(false); }}
-              >
-                {form.category}
-                <Icon d={ICONS.chevDown} size={14} color="#888" />
-              </button>
-              {catOpen && (
-                <Dropdown
-                  items={CATEGORIES.map((c) => ({ label: c, value: c }))}
-                  onSelect={(v) => { setForm((f) => ({ ...f, category: v })); setCatOpen(false); }}
-                  onClose={() => setCatOpen(false)}
-                />
-              )}
-            </div>
-          </FieldWrap>
-
-          {/* Priority */}
-          <FieldWrap label="Priority">
-            <div style={{ position: "relative" }}>
-              <button
-                style={{
-                  ...styles.select,
-                  color: selPriority.color,
-                  borderColor: `${selPriority.color}44`,
-                }}
-                onClick={() => { setPriOpen((o) => !o); setCatOpen(false); }}
-              >
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: "50%",
-                    background: selPriority.color,
-                    flexShrink: 0,
-                    display: "inline-block",
-                  }}
-                />
-                {selPriority.label}
-                <Icon d={ICONS.chevDown} size={14} color={selPriority.color} />
-              </button>
-              {priOpen && (
-                <Dropdown
-                  items={PRIORITIES.map((p) => ({
-                    label: p.label,
-                    value: p.value,
-                    color: p.color,
-                  }))}
-                  onSelect={(v) => { setForm((f) => ({ ...f, priority: v })); setPriOpen(false); }}
-                  onClose={() => setPriOpen(false)}
-                />
-              )}
-            </div>
-          </FieldWrap>
+        {/* Category + Priority */}
+        <div className="stcv-two-col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div>
+            <Label>Category</Label>
+            <Select value={form.category} options={CATEGORIES}
+              onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
+          </div>
+          <div>
+            <Label>Priority</Label>
+            <Select
+              value={form.priority}
+              options={PRIORITIES.map((p) => ({ value: p.value, label: p.label }))}
+              onChange={(v) => setForm((f) => ({ ...f, priority: v }))}
+              colorFn={(v) => prioConf(v).color}
+            />
+          </div>
         </div>
 
         {/* Description */}
-        <FieldWrap label="Description *" error={errors.description}>
-          <textarea
-            style={{
-              ...styles.textarea,
-              ...(errors.description ? styles.inputError : {}),
-            }}
-            placeholder="Explain the issue in detail. Include what happened, what you expected, and steps to reproduce if applicable."
-            value={form.description}
-            onChange={set("description")}
-            rows={5}
-          />
-        </FieldWrap>
+        <div>
+          <Label required>Description</Label>
+          <TextInput value={form.description} onChange={set("description")}
+            placeholder="Describe what happened, what you expected, and steps to reproduce…"
+            error={errors.description} multiline rows={5} />
+          <FieldErr msg={errors.description} />
+        </div>
+
+        {/* Divider */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+          <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: "nowrap" }}>
+            Optional — Link to a lead or recording
+          </span>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
 
         {/* Optional links */}
-        <div style={styles.sectionDivider}>
-          <span>Optional — Link to Lead or Recording</span>
-        </div>
-
-        <div style={styles.twoCol}>
-          <FieldWrap label="Lead ID (if applicable)">
-            <input
-              style={styles.input}
-              placeholder="Firestore lead doc ID"
-              value={form.linkedLeadId}
-              onChange={set("linkedLeadId")}
-            />
-          </FieldWrap>
-          <FieldWrap label="Lead Name">
-            <input
-              style={styles.input}
-              placeholder="Customer name"
-              value={form.linkedLeadName}
-              onChange={set("linkedLeadName")}
-            />
-          </FieldWrap>
-        </div>
-
-        <FieldWrap label="Recording ID (if applicable)">
-          <input
-            style={styles.input}
-            placeholder="Plivo recording ID or storage path"
-            value={form.linkedRecordingId}
-            onChange={set("linkedRecordingId")}
-          />
-          <span style={styles.hint}>
-            Linking a recording lets your manager play it directly from the ticket.
-          </span>
-        </FieldWrap>
-
-        {errors.submit && (
-          <div style={styles.submitError}>
-            <Icon d={ICONS.alert} size={14} color="#E05C5C" />
-            {errors.submit}
+        <div className="stcv-two-col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div>
+            <Label>Lead ID</Label>
+            <TextInput icon={D.link} value={form.linkedLeadId} onChange={set("linkedLeadId")} placeholder="Firestore lead doc ID" />
           </div>
-        )}
+          <div>
+            <Label>Lead Name</Label>
+            <TextInput icon={D.user} value={form.linkedLeadName} onChange={set("linkedLeadName")} placeholder="Customer name" />
+          </div>
+        </div>
+        <div>
+          <Label>Recording ID</Label>
+          <TextInput icon={D.mic} value={form.linkedRecordingId} onChange={set("linkedRecordingId")} placeholder="Plivo recording ID or storage path" />
+          <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, marginTop: 5 }}>
+            Linking a recording lets your manager click play directly from this ticket.
+          </p>
+        </div>
 
         {/* Actions */}
-        <div style={styles.formFooter}>
-          <button style={styles.cancelBtn} onClick={onBack}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, paddingTop: 4 }}>
+          <button className="stcv-btn-ghost" onClick={onBack}
+            style={{ padding: "10px 20px", minHeight: 44, borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.textSec, fontFamily: "DM Sans, sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
             Cancel
           </button>
-          <button
-            style={{ ...styles.saveBtn, opacity: saving ? 0.6 : 1 }}
-            onClick={submit}
-            disabled={saving}
-          >
-            <Icon d={ICONS.send} size={15} color="#121212" />
+          <button className="stcv-btn-gold" onClick={submit} disabled={saving}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 22px", minHeight: 44, borderRadius: 8, border: "none", background: C.gold, color: "#000", fontFamily: "DM Sans, sans-serif", fontSize: 14, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1 }}>
+            <Ic d={D.send} s={14} c="#000" />
             {saving ? "Submitting…" : "Submit Ticket"}
           </button>
         </div>
@@ -575,742 +571,334 @@ const CreateForm = ({ currentUser, userProfile, onBack, onSuccess }) => {
   );
 };
 
-// ── Ticket Detail ────────────────────────────────────────────────────────────
-const TicketDetail = ({ ticket: t, currentUser, userProfile, onBack }) => {
-  const [comment,   setComment]  = useState("");
-  const [posting,   setPosting]  = useState(false);
-  const [stageOpen, setStageOpen] = useState(false);
-  const [ticket,    setTicket]   = useState(t);
+// ═══════════════════════════════════════════════════════════════════════════════
+// DETAIL VIEW
+// ═══════════════════════════════════════════════════════════════════════════════
+const DetailView = ({ ticketId, currentUser, userProfile, onBack, showToast }) => {
+  const [ticket,   setTicket]   = useState(null);
+  const [comment,  setComment]  = useState("");
+  const [posting,  setPosting]  = useState(false);
+  const [stgSaving,setStgSaving]= useState(false);
 
-  const canChangeStage = ["manager", "company_admin", "platform_owner", "support_agent"].includes(
-    userProfile?.role
-  );
+  const canChangeStage = MANAGER_ROLES.includes(userProfile?.role);
+  const overdue = ticket && isOverdue(ticket.createdAt) && !["Resolved","Closed"].includes(ticket.stage);
 
-  const pri = priorityConfig(ticket.priority);
-  const stg = stageConfig(ticket.stage);
-  const overdue = isOverdue(ticket.createdAt) && !["Resolved", "Closed"].includes(ticket.stage);
-
-  // Live updates for this ticket
+  // Live ticket listener
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "tickets", ticket.id), (snap) => {
-      if (snap.exists()) setTicket({ id: snap.id, ...snap.data() });
-    });
+    const unsub = onSnapshot(doc(db, COLLECTIONS.TICKETS, ticketId),
+      (snap) => snap.exists() && setTicket({ id: snap.id, ...snap.data() }),
+      () => {}
+    );
     return () => unsub();
-  }, [ticket.id]);
+  }, [ticketId]);
 
   const changeStage = async (newStage) => {
-    setStageOpen(false);
-    const entry = {
-      action:    `Stage changed to ${newStage}`,
-      by:        userProfile?.displayName ?? currentUser.email,
-      timestamp: new Date().toISOString(),
-    };
-    await updateDoc(doc(db, "tickets", ticket.id), {
-      stage:     newStage,
-      updatedAt: serverTimestamp(),
-      timeline:  [...(ticket.timeline ?? []), entry],
-    });
+    setStgSaving(true);
+    const entry = { action: `Stage → ${newStage}`, by: userProfile?.displayName ?? currentUser.email, timestamp: new Date().toISOString() };
+    try {
+      await updateDoc(doc(db, COLLECTIONS.TICKETS, ticketId), {
+        stage: newStage, updatedAt: serverTimestamp(),
+        timeline: [...(ticket.timeline ?? []), entry],
+      });
+      showToast(`Stage changed to ${newStage}`);
+    } catch {
+      showToast("Failed to change stage", "error");
+    } finally {
+      setStgSaving(false);
+    }
   };
 
   const postComment = async () => {
     if (!comment.trim()) return;
     setPosting(true);
     const entry = {
-      action:    `Comment: ${comment.trim()}`,
-      by:        userProfile?.displayName ?? currentUser.email,
-      timestamp: new Date().toISOString(),
-      isComment: true,
+      action: comment.trim(), by: userProfile?.displayName ?? currentUser.email,
+      timestamp: new Date().toISOString(), isComment: true,
     };
     try {
-      await updateDoc(doc(db, "tickets", ticket.id), {
+      await updateDoc(doc(db, COLLECTIONS.TICKETS, ticketId), {
         updatedAt: serverTimestamp(),
-        timeline:  [...(ticket.timeline ?? []), entry],
+        timeline: [...(ticket.timeline ?? []), entry],
       });
       setComment("");
+      showToast("Comment added");
+    } catch {
+      showToast("Failed to add comment", "error");
     } finally {
       setPosting(false);
     }
   };
 
+  // Skeleton while loading
+  if (!ticket) return (
+    <div>
+      <div style={{ height: 40, background: C.surface, borderRadius: 8, marginBottom: 24 }} className="stcv-skel" />
+      <Skeleton />
+    </div>
+  );
+
   return (
-    <div style={styles.page}>
-      {/* Header */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <button style={styles.backBtn} onClick={onBack}>
-            <Icon d={ICONS.chevLeft} size={16} color="#AAAAAA" />
-          </button>
-          <div>
-            <h1 style={{ ...styles.title, fontSize: 18 }}>{ticket.subject}</h1>
-            <p style={styles.subtitle}>
-              Raised by {ticket.raisedByName} · {timeAgo(ticket.createdAt)}
-            </p>
-          </div>
+    <div className="stcv-up">
+      {/* Back + title */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 20 }}>
+        <button className="stcv-btn-ghost" onClick={onBack}
+          style={{ width: 38, height: 38, borderRadius: 9, border: `1px solid ${C.border}`, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+          <Ic d={D.back} s={16} c={C.textSec} />
+        </button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h1 style={{ fontFamily: "Playfair Display, serif", fontWeight: 700, fontSize: 19, color: C.text, margin: 0, lineHeight: 1.3 }}>
+            {ticket.subject}
+          </h1>
+          <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 12, color: C.textSec, margin: "5px 0 0" }}>
+            Raised by {ticket.raisedByName} · {timeAgo(ticket.createdAt)}
+          </p>
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* Overdue banner */}
-        {overdue && (
-          <div style={styles.overdueBanner}>
-            <Icon d={ICONS.alert} size={15} color="#E05C5C" />
+      {/* Overdue banner */}
+      {overdue && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderRadius: 10, marginBottom: 16, background: C.redMuted, border: `1px solid ${C.red}44` }}>
+          <Ic d={D.clock} s={16} c={C.red} />
+          <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, fontWeight: 600, color: C.red }}>
             This ticket has been open for over 24 hours without resolution.
+          </span>
+        </div>
+      )}
+
+      {/* Meta pills */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
+        <StagePill stage={ticket.stage} />
+        <PrioPill value={ticket.priority} />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 9px", borderRadius: 99, background: C.surface, border: `1px solid ${C.border}`, fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textSec }}>
+          <Ic d={D.tag} s={11} c={C.textMuted} /> {ticket.category}
+        </span>
+        {ticket.linkedLeadName && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 9px", borderRadius: 99, background: C.surface, border: `1px solid ${C.border}`, fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textSec }}>
+            <Ic d={D.link} s={11} c={C.textMuted} /> {ticket.linkedLeadName}
+          </span>
+        )}
+        {ticket.linkedRecordingId && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 9px", borderRadius: 99, background: C.goldMuted, border: `1px solid ${C.gold}33`, fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.gold }}>
+            <Ic d={D.mic} s={11} c={C.gold} /> Recording linked
+          </span>
+        )}
+      </div>
+
+      {/* Body grid */}
+      <div className="stcv-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 16, alignItems: "start" }}>
+        {/* Left: description + activity */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Description */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+            <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".7px", margin: "0 0 12px" }}>Description</p>
+            <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 14, color: C.textSec, lineHeight: 1.72, margin: 0, whiteSpace: "pre-wrap" }}>
+              {ticket.description}
+            </p>
+          </div>
+
+          {/* Activity timeline */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+            <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".7px", margin: "0 0 14px" }}>
+              Activity ({(ticket.timeline ?? []).length})
+            </p>
+
+            {/* Timeline entries */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 0, maxHeight: 300, overflowY: "auto", marginBottom: 16 }}>
+              {(ticket.timeline ?? []).map((entry, i) => (
+                <div key={i} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: entry.isComment ? C.gold : C.border, flexShrink: 0, marginTop: 5 }} />
+                  <div>
+                    <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: entry.isComment ? C.text : C.textSec, margin: 0, lineHeight: 1.5 }}>
+                      {entry.action}
+                    </p>
+                    <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, margin: "3px 0 0" }}>
+                      {entry.by} · {fmtDateTime(entry.timestamp)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Comment box */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input className="stcv-input"
+                style={{ flex: 1, padding: "10px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontFamily: "DM Sans, sans-serif", fontSize: 13 }}
+                placeholder="Add a comment or update…"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && postComment()}
+              />
+              <button className="stcv-btn-gold"
+                onClick={postComment}
+                disabled={posting || !comment.trim()}
+                style={{ padding: "10px 14px", borderRadius: 8, border: "none", background: C.gold, cursor: (posting || !comment.trim()) ? "not-allowed" : "pointer", opacity: (posting || !comment.trim()) ? 0.5 : 1, display: "flex", alignItems: "center" }}>
+                <Ic d={D.send} s={15} c="#000" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: stage change panel (managers only) */}
+        {canChangeStage && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+            <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".7px", margin: "0 0 14px" }}>Change Stage</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {STAGES.map((stg) => {
+                const isActive = ticket.stage === stg.key;
+                return (
+                  <button key={stg.key}
+                    className="stcv-stage-opt"
+                    disabled={isActive || stgSaving}
+                    onClick={() => !isActive && changeStage(stg.key)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10,
+                      padding: "10px 14px", borderRadius: 9, width: "100%", textAlign: "left",
+                      border: `1px solid ${isActive ? stg.color + "55" : C.border}`,
+                      background: isActive ? `${stg.color}18` : "transparent",
+                      cursor: isActive ? "default" : stgSaving ? "not-allowed" : "pointer",
+                      opacity: (!isActive && stgSaving) ? 0.5 : 1,
+                    }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: stg.color, flexShrink: 0 }} />
+                    <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, fontWeight: 600, color: isActive ? stg.color : C.textSec, flex: 1 }}>
+                      {stg.key}
+                    </span>
+                    {isActive && <Ic d={D.check} s={13} c={stg.color} />}
+                  </button>
+                );
+              })}
+            </div>
+            <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, marginTop: 12, lineHeight: 1.6 }}>
+              Every stage change is logged in the activity timeline automatically.
+            </p>
           </div>
         )}
-
-        {/* Meta pills */}
-        <div style={styles.metaPills}>
-          <span style={{ ...styles.stagePill, background: `${stg.color}18`, border: `1px solid ${stg.color}44`, color: stg.color }}>
-            {ticket.stage}
-          </span>
-          <span style={{ ...styles.priorityPill, background: `${pri.color}18`, color: pri.color }}>
-            {pri.label} priority
-          </span>
-          <span style={{ ...styles.metaPill }}>
-            <Icon d={ICONS.filter} size={12} color="#888" />
-            {ticket.category}
-          </span>
-          {ticket.linkedLeadName && (
-            <span style={styles.metaPill}>
-              <Icon d={ICONS.link} size={12} color="#888" />
-              {ticket.linkedLeadName}
-            </span>
-          )}
-          {ticket.linkedRecordingId && (
-            <span style={{ ...styles.metaPill, color: "#F2A65A", borderColor: "#F2A65A33" }}>
-              <Icon d={ICONS.mic} size={12} color="#F2A65A" />
-              Recording linked
-            </span>
-          )}
-        </div>
-
-        {/* Body + actions */}
-        <div style={styles.detailGrid}>
-          {/* Left — description + timeline */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={styles.panel}>
-              <p style={styles.detailSectionTitle}>Description</p>
-              <p style={styles.detailDesc}>{ticket.description}</p>
-            </div>
-
-            {/* Timeline */}
-            <div style={styles.panel}>
-              <p style={styles.detailSectionTitle}>Activity</p>
-              <div style={styles.timeline}>
-                {(ticket.timeline ?? []).map((entry, i) => (
-                  <div key={i} style={styles.timelineItem}>
-                    <div style={styles.timelineDot} />
-                    <div style={styles.timelineBody}>
-                      <span
-                        style={{
-                          ...styles.timelineText,
-                          color: entry.isComment ? "#F5F5F5" : "#AAAAAA",
-                        }}
-                      >
-                        {entry.action}
-                      </span>
-                      <span style={styles.timelineMeta}>
-                        {entry.by} · {new Date(entry.timestamp).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Add comment */}
-              <div style={styles.commentRow}>
-                <input
-                  style={{ ...styles.input, flex: 1 }}
-                  placeholder="Add a comment or update…"
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && postComment()}
-                />
-                <button
-                  style={{ ...styles.saveBtn, padding: "10px 16px", opacity: posting ? 0.6 : 1 }}
-                  onClick={postComment}
-                  disabled={posting || !comment.trim()}
-                >
-                  <Icon d={ICONS.send} size={14} color="#121212" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Right — stage change */}
-          {canChangeStage && (
-            <div style={styles.panel}>
-              <p style={styles.detailSectionTitle}>Change Stage</p>
-              <div style={{ position: "relative" }}>
-                <button
-                  style={{
-                    ...styles.select,
-                    width: "100%",
-                    color: stg.color,
-                    borderColor: `${stg.color}44`,
-                  }}
-                  onClick={() => setStageOpen((o) => !o)}
-                >
-                  <span
-                    style={{
-                      width: 8, height: 8, borderRadius: "50%",
-                      background: stg.color, display: "inline-block",
-                    }}
-                  />
-                  {ticket.stage}
-                  <Icon d={ICONS.chevDown} size={14} color={stg.color} />
-                </button>
-                {stageOpen && (
-                  <Dropdown
-                    items={STAGES.map((s) => ({ label: s.key, value: s.key, color: s.color }))}
-                    onSelect={changeStage}
-                    onClose={() => setStageOpen(false)}
-                  />
-                )}
-              </div>
-              <p style={{ ...styles.hint, marginTop: 10 }}>
-                Changing stage adds an entry to the activity log automatically.
-              </p>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
 };
 
-// ── Dropdown ─────────────────────────────────────────────────────────────────
-const Dropdown = ({ items, onSelect, onClose }) => (
-  <>
-    <div style={styles.dropdownOverlay} onClick={onClose} />
-    <div style={styles.dropdown}>
-      {items.map((item) => (
-        <button
-          key={item.value}
-          style={{ ...styles.dropdownItem, color: item.color ?? "#F5F5F5" }}
-          onClick={() => onSelect(item.value)}
-        >
-          {item.color && (
-            <span
-              style={{
-                width: 8, height: 8, borderRadius: "50%",
-                background: item.color, display: "inline-block",
-              }}
-            />
-          )}
-          {item.label}
-        </button>
-      ))}
-    </div>
-  </>
-);
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROOT EXPORT
+// ═══════════════════════════════════════════════════════════════════════════════
+export const SupportTicketCreateView = () => {
+  const { currentUser, userProfile } = useAuth();
+  const [view,       setView]        = useState(VIEW.LIST);
+  const [selectedId, setSelectedId]  = useState(null);
+  const [tickets,    setTickets]     = useState([]);
+  const [loading,    setLoading]     = useState(true);
+  const [filterStage,setFilterStage] = useState("all");
+  const [toast, showToast]           = useToast();
 
-// ── Field wrapper ────────────────────────────────────────────────────────────
-const FieldWrap = ({ label, error, children }) => (
-  <div style={styles.field}>
-    <label style={styles.fieldLabel}>{label}</label>
-    {children}
-    {error && <span style={styles.fieldError}>{error}</span>}
-  </div>
-);
+  const isManager = MANAGER_ROLES.includes(userProfile?.role);
 
-// ── Empty state ──────────────────────────────────────────────────────────────
-const EmptyTickets = ({ onNew }) => (
-  <div style={styles.empty}>
-    <div style={styles.emptyIconRing}>
-      <Icon d={ICONS.ticket} size={30} color="#B65E3C" />
-    </div>
-    <p style={styles.emptyTitle}>No tickets yet</p>
-    <p style={styles.emptyText}>Raise a support ticket when you encounter a problem.</p>
-    <button style={styles.saveBtn} onClick={onNew}>
-      <Icon d={ICONS.plus} size={14} color="#121212" />
-      Raise First Ticket
-    </button>
-  </div>
-);
+  // ── Real-time ticket list ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!currentUser?.uid || !userProfile) return;
+    const constraints = isManager
+      ? [where("companyId", "==", userProfile.companyId ?? ""), orderBy("createdAt", "desc")]
+      : [where("raisedBy",  "==", currentUser.uid),             orderBy("createdAt", "desc")];
 
-// ── Loading skeleton ─────────────────────────────────────────────────────────
-const LoadingSkeleton = () => (
-  <div style={styles.list}>
-    {[...Array(4)].map((_, i) => (
-      <div key={i} style={{ ...styles.card, borderLeft: "3px solid #2A2A2A", cursor: "default" }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <div style={{ height: 20, width: 70, background: "#222", borderRadius: 6 }} />
-          <div style={{ height: 20, width: 50, background: "#222", borderRadius: 6 }} />
-        </div>
-        <div style={{ height: 16, width: "65%", background: "#1E1E1E", borderRadius: 4, marginBottom: 8 }} />
-        <div style={{ height: 13, width: "85%", background: "#1C1C1C", borderRadius: 4 }} />
+    const q     = query(collection(db, COLLECTIONS.TICKETS), ...constraints);
+    const unsub = onSnapshot(q,
+      (snap) => { setTickets(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      ()      => setLoading(false)
+    );
+    return () => unsub();
+  }, [currentUser?.uid, userProfile?.role, userProfile?.companyId]);
+
+  const filtered = filterStage === "all"
+    ? tickets
+    : tickets.filter((t) => t.stage === filterStage);
+
+  const openCount   = tickets.filter((t) => !["Resolved","Closed"].includes(t.stage)).length;
+  const overdueCount= tickets.filter((t) => isOverdue(t.createdAt) && !["Resolved","Closed"].includes(t.stage)).length;
+
+  if (view === VIEW.CREATE) return (
+    <>
+      <div style={{ minHeight: "100vh", background: C.bg, padding: "28px 20px 64px", maxWidth: 760, margin: "0 auto" }}>
+        <CreateForm currentUser={currentUser} userProfile={userProfile}
+          onBack={() => setView(VIEW.LIST)} onSuccess={() => setView(VIEW.LIST)} showToast={showToast} />
       </div>
-    ))}
-  </div>
-);
+      <Toast t={toast} />
+    </>
+  );
 
-// ── Styles ───────────────────────────────────────────────────────────────────
-const styles = {
-  page: {
-    minHeight: "100vh",
-    background: "#121212",
-    color: "#F5F5F5",
-    fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
-    padding: "32px 24px",
-    maxWidth: 820,
-    margin: "0 auto",
-  },
-  header: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    marginBottom: 28,
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  headerLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-  },
-  headerIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    background: "#1E1510",
-    border: "1px solid #B65E3C33",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    background: "#1A1A1A",
-    border: "1px solid #2A2A2A",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    flexShrink: 0,
-  },
-  title: {
-    margin: 0,
-    fontSize: 22,
-    fontWeight: 700,
-    letterSpacing: "-0.3px",
-    color: "#F5F5F5",
-  },
-  subtitle: {
-    margin: "3px 0 0",
-    fontSize: 13,
-    color: "#AAAAAA",
-  },
-  newBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 7,
-    padding: "9px 18px",
-    borderRadius: 8,
-    border: "none",
-    background: "#B65E3C",
-    color: "#121212",
-    fontSize: 13,
-    fontWeight: 700,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
-  filterRow: {
-    display: "flex",
-    gap: 6,
-    marginBottom: 20,
-    overflowX: "auto",
-    paddingBottom: 4,
-    scrollbarWidth: "none",
-    flexWrap: "wrap",
-  },
-  filterBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "6px 12px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 500,
-    cursor: "pointer",
-    transition: "all 0.15s",
-    whiteSpace: "nowrap",
-  },
-  filterCount: {
-    padding: "1px 6px",
-    borderRadius: 5,
-    fontSize: 11,
-    fontWeight: 700,
-  },
-  list: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-  },
-  card: {
-    background: "#1A1A1A",
-    border: "1px solid #252525",
-    borderRadius: 10,
-    padding: "14px 40px 14px 16px",
-    position: "relative",
-  },
-  cardTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  cardTopLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  overdueTag: {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    padding: "2px 8px",
-    borderRadius: 5,
-    background: "#3A1515",
-    border: "1px solid #E05C5C33",
-    color: "#E05C5C",
-    fontSize: 11,
-    fontWeight: 600,
-  },
-  stagePill: {
-    display: "inline-flex",
-    alignItems: "center",
-    padding: "2px 9px",
-    borderRadius: 5,
-    fontSize: 11,
-    fontWeight: 600,
-  },
-  priorityPill: {
-    display: "inline-flex",
-    alignItems: "center",
-    padding: "2px 8px",
-    borderRadius: 5,
-    fontSize: 11,
-    fontWeight: 600,
-  },
-  metaPill: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    padding: "2px 8px",
-    borderRadius: 5,
-    background: "#222",
-    border: "1px solid #2A2A2A",
-    color: "#AAAAAA",
-    fontSize: 11,
-  },
-  cardTime: {
-    fontSize: 11,
-    color: "#666",
-    flexShrink: 0,
-  },
-  cardSubject: {
-    margin: "0 0 6px",
-    fontSize: 15,
-    fontWeight: 600,
-    color: "#F5F5F5",
-  },
-  cardDesc: {
-    margin: "0 0 10px",
-    fontSize: 13,
-    color: "#AAAAAA",
-    lineHeight: 1.5,
-  },
-  cardMeta: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-  metaItem: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    fontSize: 11,
-    color: "#888",
-  },
-  panel: {
-    background: "#1A1A1A",
-    border: "1px solid #252525",
-    borderRadius: 12,
-    padding: "22px 24px",
-  },
-  twoCol: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 16,
-  },
-  field: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-  },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: "#AAAAAA",
-    textTransform: "uppercase",
-    letterSpacing: "0.6px",
-  },
-  fieldError: {
-    fontSize: 12,
-    color: "#E05C5C",
-    marginTop: 2,
-  },
-  input: {
-    width: "100%",
-    padding: "10px 14px",
-    background: "#121212",
-    border: "1px solid #2A2A2A",
-    borderRadius: 8,
-    color: "#F5F5F5",
-    fontSize: 14,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "inherit",
-  },
-  inputError: {
-    borderColor: "#E05C5C66",
-  },
-  textarea: {
-    width: "100%",
-    padding: "10px 14px",
-    background: "#121212",
-    border: "1px solid #2A2A2A",
-    borderRadius: 8,
-    color: "#F5F5F5",
-    fontSize: 14,
-    outline: "none",
-    resize: "vertical",
-    boxSizing: "border-box",
-    fontFamily: "inherit",
-    lineHeight: 1.6,
-    minHeight: 110,
-  },
-  select: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    padding: "10px 14px",
-    background: "#121212",
-    border: "1px solid #2A2A2A",
-    borderRadius: 8,
-    color: "#F5F5F5",
-    fontSize: 14,
-    cursor: "pointer",
-    justifyContent: "space-between",
-    boxSizing: "border-box",
-  },
-  sectionDivider: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    color: "#555",
-    fontSize: 12,
-    fontWeight: 500,
-    textTransform: "uppercase",
-    letterSpacing: "0.6px",
-  },
-  hint: {
-    fontSize: 11,
-    color: "#666",
-    marginTop: 4,
-  },
-  submitError: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "10px 14px",
-    borderRadius: 8,
-    background: "#3A1515",
-    border: "1px solid #E05C5C33",
-    color: "#E05C5C",
-    fontSize: 13,
-  },
-  formFooter: {
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: 10,
-    marginTop: 8,
-  },
-  cancelBtn: {
-    padding: "10px 20px",
-    borderRadius: 8,
-    border: "1px solid #2A2A2A",
-    background: "transparent",
-    color: "#AAAAAA",
-    fontSize: 14,
-    cursor: "pointer",
-  },
-  saveBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "10px 22px",
-    borderRadius: 8,
-    border: "none",
-    background: "#B65E3C",
-    color: "#121212",
-    fontSize: 14,
-    fontWeight: 700,
-    cursor: "pointer",
-    letterSpacing: "0.2px",
-    transition: "opacity 0.15s",
-  },
-  overdueBanner: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "12px 16px",
-    borderRadius: 8,
-    background: "#3A1515",
-    border: "1px solid #E05C5C44",
-    color: "#E05C5C",
-    fontSize: 13,
-    fontWeight: 500,
-  },
-  metaPills: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  detailGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr auto",
-    gap: 16,
-    alignItems: "start",
-  },
-  detailSectionTitle: {
-    margin: "0 0 14px",
-    fontSize: 12,
-    fontWeight: 600,
-    color: "#888",
-    textTransform: "uppercase",
-    letterSpacing: "0.6px",
-  },
-  detailDesc: {
-    margin: 0,
-    fontSize: 14,
-    color: "#AAAAAA",
-    lineHeight: 1.7,
-    whiteSpace: "pre-wrap",
-  },
-  timeline: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 0,
-    marginBottom: 16,
-    maxHeight: 300,
-    overflowY: "auto",
-  },
-  timelineItem: {
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 12,
-    padding: "10px 0",
-    borderBottom: "1px solid #1E1E1E",
-  },
-  timelineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: "#B65E3C",
-    flexShrink: 0,
-    marginTop: 4,
-  },
-  timelineBody: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 3,
-  },
-  timelineText: {
-    fontSize: 13,
-    lineHeight: 1.5,
-  },
-  timelineMeta: {
-    fontSize: 11,
-    color: "#555",
-  },
-  commentRow: {
-    display: "flex",
-    gap: 8,
-    marginTop: 4,
-  },
-  dropdownOverlay: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 9,
-  },
-  dropdown: {
-    position: "absolute",
-    top: "calc(100% + 4px)",
-    left: 0,
-    right: 0,
-    background: "#1E1E1E",
-    border: "1px solid #2A2A2A",
-    borderRadius: 8,
-    zIndex: 10,
-    overflow: "hidden",
-    boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-  },
-  dropdownItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    padding: "10px 14px",
-    background: "none",
-    border: "none",
-    cursor: "pointer",
-    fontSize: 13,
-    textAlign: "left",
-    transition: "background 0.1s",
-  },
-  empty: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "80px 24px",
-    textAlign: "center",
-    gap: 14,
-  },
-  emptyIconRing: {
-    width: 72,
-    height: 72,
-    borderRadius: "50%",
-    background: "#1E1510",
-    border: "1px solid #B65E3C33",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
-  emptyTitle: {
-    margin: 0,
-    fontSize: 17,
-    fontWeight: 600,
-    color: "#F5F5F5",
-  },
-  emptyText: {
-    margin: 0,
-    fontSize: 14,
-    color: "#888",
-    maxWidth: 300,
-    lineHeight: 1.6,
-  },
+  if (view === VIEW.DETAIL && selectedId) return (
+    <>
+      <div style={{ minHeight: "100vh", background: C.bg, padding: "28px 20px 64px", maxWidth: 900, margin: "0 auto" }}>
+        <DetailView ticketId={selectedId} currentUser={currentUser} userProfile={userProfile}
+          onBack={() => { setSelectedId(null); setView(VIEW.LIST); }} showToast={showToast} />
+      </div>
+      <Toast t={toast} />
+    </>
+  );
+
+  // ── LIST VIEW ─────────────────────────────────────────────────────────────
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "DM Sans, sans-serif", padding: "28px 20px 64px", maxWidth: 820, margin: "0 auto" }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontFamily: "Playfair Display, serif", fontWeight: 700, fontSize: 22, color: C.text, margin: 0 }}>
+            Support Tickets
+          </h1>
+          <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: C.textSec, margin: "4px 0 0" }}>
+            {loading ? "Loading…" : `${openCount} open${overdueCount > 0 ? ` · ${overdueCount} overdue` : ""}`}
+          </p>
+        </div>
+        <button className="stcv-btn-gold"
+          onClick={() => setView(VIEW.CREATE)}
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px", minHeight: 44, borderRadius: 8, border: "none", background: C.gold, color: "#000", fontFamily: "DM Sans, sans-serif", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <Ic d={D.plus} s={14} c="#000" /> New Ticket
+        </button>
+      </div>
+
+      {/* Stage filter tabs */}
+      <div className="stcv-filters" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+        {["all", ...STAGES.map((s) => s.key)].map((key) => {
+          const active = filterStage === key;
+          const cfg    = key !== "all" ? stageConf(key) : null;
+          const count  = key === "all" ? tickets.length : tickets.filter((t) => t.stage === key).length;
+          return (
+            <button key={key} className="stcv-filter"
+              onClick={() => setFilterStage(key)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "6px 13px", minHeight: 34, borderRadius: 8,
+                border: `1px solid ${active ? (cfg?.color ?? C.gold) + "55" : C.border}`,
+                background: active ? `${cfg?.color ?? C.gold}14` : C.surface,
+                color: active ? (cfg?.color ?? C.gold) : C.textSec,
+                fontFamily: "DM Sans, sans-serif", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", whiteSpace: "nowrap",
+              }}>
+              {key === "all" ? "All" : key}
+              {count > 0 && (
+                <span style={{ minWidth: 18, height: 18, borderRadius: 9, padding: "0 4px", background: active ? `${cfg?.color ?? C.gold}22` : C.surfaceHov, color: active ? (cfg?.color ?? C.gold) : C.textMuted, fontFamily: "DM Sans, sans-serif", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* List */}
+      {loading ? <Skeleton />
+        : filtered.length === 0 ? <Empty onNew={() => setView(VIEW.CREATE)} />
+        : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {filtered.map((t, i) => (
+              <div key={t.id} style={{ animationDelay: `${i * 0.04}s` }}>
+                <TicketCard ticket={t} onClick={() => { setSelectedId(t.id); setView(VIEW.DETAIL); }} />
+              </div>
+            ))}
+          </div>
+        )}
+
+      <Toast t={toast} />
+    </div>
+  );
 };
 
 export default SupportTicketCreateView;

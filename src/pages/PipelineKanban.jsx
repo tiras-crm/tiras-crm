@@ -1,488 +1,260 @@
-// TIRAS CRM — PipelineKanban.jsx
-// Company Admin — drag-and-drop pipeline board; dropping a card updates the lead's stage in Firestore instantly
+// TIRAS CRM V2 — PipelineKanban.jsx  (UPPARA account)
+// Real-time drag-drop pipeline · onSnapshot · custom stages · Obsidian Gold theme
+// Mobile: horizontal scroll · optimistic Firestore writes · toast feedback
 //
-// USAGE: In src/pages/index.js replace:
-//   export const PipelineKanban = () => <Placeholder name="Pipeline Kanban Board" />;
-// with:
-//   export { PipelineKanban } from "./PipelineKanban";
+// src/pages/PipelineKanban.jsx
+// export { PipelineKanban } from "./PipelineKanban";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
-  collection, query, where, getDocs, doc,
-  updateDoc, serverTimestamp, orderBy,
+  collection, query, where, doc, onSnapshot,
+  updateDoc, orderBy, serverTimestamp, getDocs,
 } from "firebase/firestore";
 import { db, COLLECTIONS } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  COLORS, FONTS, SPACING, RADIUS, SHADOWS, STYLES, TRANSITIONS,
-} from "../theme";
-import {
   RiLoader4Line, RiRefreshLine, RiAddLine,
-  RiPhoneLine, RiMoneyDollarCircleLine, RiDragMove2Line,
-  RiUserLine, RiTimeLine,
+  RiDragMove2Line, RiPhoneLine, RiUserLine,
+  RiMoneyDollarCircleLine, RiTimeLine, RiCheckLine, RiAlertLine,
 } from "react-icons/ri";
 
-// ─── Stage config ─────────────────────────────────────────────────────────────
+// ─── V2 tokens ────────────────────────────────────────────────────────────────
+const C={bg:"#121212",surface:"#1A1A1B",surfaceHov:"#202022",surfaceAct:"#232325",gold:"#D4AF37",goldMuted:"rgba(212,175,55,0.12)",goldBorder:"rgba(212,175,55,0.25)",red:"#E63946",redMuted:"rgba(230,57,70,0.12)",text:"#F5F5F5",sub:"#9A9A9A",border:"#2A2A2B",success:"#2ECC71",successMuted:"rgba(46,204,113,0.12)",warning:"#F39C12",warningMuted:"rgba(243,156,18,0.12)",info:"#3498DB",infoMuted:"rgba(52,152,219,0.12)"};
+const FH="'Playfair Display',Georgia,serif";const FB="'DM Sans',system-ui,sans-serif";
+const R={sm:"6px",md:"8px",lg:"12px",xl:"16px",full:"9999px"};
+const SH={sm:"0 1px 3px rgba(0,0,0,0.4)",md:"0 4px 16px rgba(0,0,0,0.5)"};
 
-const DEFAULT_STAGES = [
-  "New", "Contacted", "Interested",
-  "Follow-up", "Negotiation", "Closed Won", "Closed Lost",
-];
+const DEFAULT_STAGES=["New","Contacted","Interested","Follow-up","Negotiation","Closed Won","Closed Lost"];
 
-const STAGE_COLOR = {
-  "New":         { primary: COLORS.info,    bg: COLORS.infoMuted },
-  "Contacted":   { primary: COLORS.primary, bg: COLORS.primaryMuted },
-  "Interested":  { primary: COLORS.accent,  bg: COLORS.accentMuted },
-  "Follow-up":   { primary: COLORS.warning, bg: COLORS.warningMuted },
-  "Negotiation": { primary: "#9B59B6",      bg: "#9B59B622" },
-  "Closed Won":  { primary: COLORS.success, bg: COLORS.successMuted },
-  "Closed Lost": { primary: COLORS.danger,  bg: COLORS.dangerMuted },
+const STAGE_CFG={
+  "New":        {c:C.info,      bg:C.infoMuted},
+  "Contacted":  {c:C.gold,      bg:C.goldMuted},
+  "Interested": {c:"#E67E22",   bg:"rgba(230,126,34,0.12)"},
+  "Follow-up":  {c:C.warning,   bg:C.warningMuted},
+  "Negotiation":{c:"#9B59B6",   bg:"rgba(155,89,182,0.12)"},
+  "Closed Won": {c:C.success,   bg:C.successMuted},
+  "Closed Lost":{c:C.red,       bg:C.redMuted},
 };
 
-const SCORE_DOT = {
-  hot:  COLORS.hot,
-  warm: COLORS.warm,
-  cold: COLORS.cold,
-  dead: COLORS.dead,
-};
+const SCORE_DOT={hot:"#FF6B35",warm:C.warning,cold:C.info,dead:C.sub};
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const formatINR=(n)=>{if(!n)return null;if(n>=100000)return`₹${(n/100000).toFixed(1)}L`;if(n>=1000)return`₹${(n/1000).toFixed(1)}K`;return`₹${n}`;};
+const relTime=(ts)=>{if(!ts)return null;const d=ts.toDate?ts.toDate():new Date(ts),s=Math.floor((Date.now()-d)/1000);if(s<3600)return`${Math.floor(s/60)}m`;if(s<86400)return`${Math.floor(s/3600)}h`;return`${Math.floor(s/86400)}d`;};
 
-const formatINR = (n) => {
-  if (!n) return null;
-  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
-  if (n >= 1000)   return `₹${(n / 1000).toFixed(1)}K`;
-  return `₹${n.toLocaleString("en-IN")}`;
-};
+const Toast=({msg,type="success"})=>{const col=type==="error"?C.red:C.success;return(<div style={{position:"fixed",bottom:"24px",right:"24px",backgroundColor:C.surfaceAct,border:`1px solid ${col}50`,borderLeft:`3px solid ${col}`,borderRadius:R.md,padding:"10px 18px",display:"flex",alignItems:"center",gap:"8px",boxShadow:SH.md,zIndex:3000,fontFamily:FB,fontSize:"13px",color:C.text,animation:"v2SlideIn 0.25s ease"}}>{type==="error"?<RiAlertLine size={14} color={col}/>:<RiCheckLine size={14} color={col}/>}{msg}</div>);};
 
-const relativeTime = (ts) => {
-  if (!ts) return null;
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  const s = Math.floor((Date.now() - d) / 1000);
-  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-};
+// ─── Lead Card ────────────────────────────────────────────────────────────────
+const LeadCard=({lead,onDragStart,onDragEnd,isDragging})=>{
+  const [hov,setHov]=useState(false);
+  const scoreColor=SCORE_DOT[lead.leadScore];
+  const val=formatINR(lead.dealValue);
+  const ago=relTime(lead.updatedAt||lead.createdAt);
 
-// ─── LeadCard ─────────────────────────────────────────────────────────────────
-
-const LeadCard = ({ lead, onDragStart, onDragEnd, isDragging }) => {
-  const scoreColor = SCORE_DOT[lead.leadScore];
-
-  return (
+  return(
     <div
       draggable
-      onDragStart={(e) => onDragStart(e, lead)}
+      onDragStart={e=>onDragStart(e,lead)}
       onDragEnd={onDragEnd}
+      onMouseEnter={()=>setHov(true)}
+      onMouseLeave={()=>setHov(false)}
       style={{
-        backgroundColor: COLORS.surfaceHover,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: RADIUS.md,
-        padding: SPACING.md,
-        cursor: "grab",
-        userSelect: "none",
-        opacity: isDragging ? 0.4 : 1,
-        transition: "opacity 0.15s ease, box-shadow 0.15s ease",
-        boxShadow: SHADOWS.sm,
-        position: "relative",
+        backgroundColor:hov?C.surfaceAct:C.surface,
+        border:`1px solid ${hov?C.goldBorder:C.border}`,
+        borderRadius:R.md,padding:"12px",cursor:"grab",userSelect:"none",
+        opacity:isDragging?0.35:1,
+        transition:"transform 0.12s ease,box-shadow 0.12s ease,border-color 0.12s ease,background-color 0.12s ease",
+        transform:hov&&!isDragging?"translateY(-1px)":"none",
+        boxShadow:hov?SH.md:SH.sm,
+        position:"relative",
       }}
     >
-      {/* Score dot indicator */}
-      {scoreColor && (
-        <div style={{
-          position: "absolute", top: SPACING.md, right: SPACING.md,
-          width: "8px", height: "8px", borderRadius: "50%",
-          backgroundColor: scoreColor,
-          boxShadow: `0 0 5px ${scoreColor}`,
-        }} />
-      )}
+      {scoreColor&&(<div style={{position:"absolute",top:"12px",right:"12px",width:"7px",height:"7px",borderRadius:"50%",backgroundColor:scoreColor,boxShadow:`0 0 5px ${scoreColor}`}}/>)}
 
-      {/* Drag handle */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: SPACING.xs, marginBottom: SPACING.sm }}>
-        <RiDragMove2Line size={13} color={COLORS.textMuted} style={{ marginTop: "2px", flexShrink: 0 }} />
-        <div style={{ minWidth: 0 }}>
-          <div style={{
-            fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold,
-            color: COLORS.textPrimary, overflow: "hidden",
-            textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.3,
-            paddingRight: SPACING.base,
-          }}>
-            {lead.name || "Unnamed Lead"}
-          </div>
-          {lead.phone && (
-            <div style={{ display: "flex", alignItems: "center", gap: "3px", marginTop: "3px", fontSize: FONTS.size.xs, color: COLORS.textSecondary }}>
-              <RiPhoneLine size={10} /> {lead.phone}
-            </div>
-          )}
+      <div style={{display:"flex",alignItems:"flex-start",gap:"6px",marginBottom:"8px"}}>
+        <RiDragMove2Line size={12} color={C.sub} style={{marginTop:"2px",flexShrink:0,opacity:hov?1:0.5,transition:"opacity 0.15s ease"}}/>
+        <div style={{minWidth:0}}>
+          <div style={{fontFamily:FB,fontSize:"13px",fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:"14px"}}>{lead.name||"Unnamed"}</div>
+          {lead.phone&&<div style={{fontFamily:FB,fontSize:"11px",color:C.sub,display:"flex",alignItems:"center",gap:"3px",marginTop:"2px"}}><RiPhoneLine size={9}/>{lead.phone}</div>}
         </div>
       </div>
 
-      {/* Meta row */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: SPACING.xs }}>
-        {lead.dealValue && (
-          <span style={{
-            fontSize: FONTS.size.xs, color: COLORS.accent,
-            fontWeight: FONTS.weight.semibold, display: "flex",
-            alignItems: "center", gap: "2px",
-          }}>
-            <RiMoneyDollarCircleLine size={11} /> {formatINR(lead.dealValue)}
-          </span>
-        )}
-        {lead.agentName && (
-          <span style={{ fontSize: FONTS.size.xs, color: COLORS.textSecondary, display: "flex", alignItems: "center", gap: "2px" }}>
-            <RiUserLine size={10} /> {lead.agentName.split(" ")[0]}
-          </span>
-        )}
-        {lead.source && (
-          <span style={{
-            fontSize: FONTS.size.xs, color: COLORS.textMuted,
-            backgroundColor: COLORS.surfaceActive, borderRadius: RADIUS.full,
-            padding: `1px ${SPACING.xs}`,
-          }}>
-            {lead.source}
-          </span>
-        )}
+      <div style={{display:"flex",flexWrap:"wrap",gap:"6px",alignItems:"center"}}>
+        {val&&(<span style={{fontFamily:FB,fontSize:"11px",fontWeight:700,color:C.gold,display:"flex",alignItems:"center",gap:"2px"}}><RiMoneyDollarCircleLine size={10}/>{val}</span>)}
+        {lead.agentName&&(<span style={{fontFamily:FB,fontSize:"11px",color:C.sub,display:"flex",alignItems:"center",gap:"2px"}}><RiUserLine size={9}/>{lead.agentName.split(" ")[0]}</span>)}
+        {lead.source&&(<span style={{fontFamily:FB,fontSize:"10px",color:C.sub,backgroundColor:C.surfaceAct,borderRadius:R.full,padding:"1px 7px"}}>{lead.source}</span>)}
       </div>
 
-      {/* Last activity */}
-      {(lead.updatedAt || lead.createdAt) && (
-        <div style={{ fontSize: FONTS.size.xs, color: COLORS.textMuted, marginTop: "6px", display: "flex", alignItems: "center", gap: "3px" }}>
-          <RiTimeLine size={9} />
-          {relativeTime(lead.updatedAt || lead.createdAt)}
-        </div>
-      )}
+      {ago&&(<div style={{fontFamily:FB,fontSize:"10px",color:C.sub,marginTop:"6px",display:"flex",alignItems:"center",gap:"2px",opacity:0.7}}><RiTimeLine size={9}/>{ago} ago</div>)}
     </div>
   );
 };
 
-// ─── StageColumn ──────────────────────────────────────────────────────────────
+// ─── Stage Column ─────────────────────────────────────────────────────────────
+const StageColumn=({stage,leads,isDragOver,onDragOver,onDragEnter,onDragLeave,onDrop,onDragStart,onDragEnd,draggingId})=>{
+  const cfg=STAGE_CFG[stage]||{c:C.sub,bg:C.surfaceAct};
+  const total=leads.reduce((s,l)=>s+(l.dealValue||0),0);
+  const fmtTotal=formatINR(total);
 
-const StageColumn = ({
-  stage, leads, isDragOver,
-  onDragOver, onDragLeave, onDrop,
-  onDragStart, onDragEnd, draggingId,
-}) => {
-  const cfg     = STAGE_COLOR[stage] || { primary: COLORS.textMuted, bg: COLORS.surfaceActive };
-  const total   = leads.reduce((s, l) => s + (l.dealValue || 0), 0);
-  const fmtTotal = formatINR(total);
-
-  return (
+  return(
     <div
-      onDragOver={onDragOver}
+      onDragOver={e=>{e.preventDefault();onDragOver(e);}}
+      onDragEnter={e=>{e.preventDefault();onDragEnter(e);}}
       onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      onDrop={e=>{e.preventDefault();onDrop(e);}}
       style={{
-        width: "240px",
-        minWidth: "240px",
-        display: "flex",
-        flexDirection: "column",
-        backgroundColor: isDragOver ? cfg.bg : COLORS.surface,
-        border: `1px solid ${isDragOver ? cfg.primary : COLORS.border}`,
-        borderRadius: RADIUS.lg,
-        transition: "background-color 0.15s ease, border-color 0.15s ease",
-        boxShadow: isDragOver ? `0 0 0 1px ${cfg.primary}40` : SHADOWS.sm,
-        maxHeight: "calc(100vh - 280px)",
-        flexShrink: 0,
+        width:"220px",minWidth:"220px",display:"flex",flexDirection:"column",
+        backgroundColor:isDragOver?cfg.bg:"transparent",
+        border:`1px solid ${isDragOver?cfg.c:C.border}`,
+        borderRadius:R.lg,
+        transition:"background-color 0.15s ease,border-color 0.15s ease,box-shadow 0.15s ease",
+        boxShadow:isDragOver?`0 0 0 2px ${cfg.c}30`:SH.sm,
+        maxHeight:"calc(100vh - 260px)",flexShrink:0,
       }}
     >
       {/* Column header */}
-      <div style={{
-        padding: `${SPACING.md} ${SPACING.base}`,
-        borderBottom: `1px solid ${COLORS.border}`,
-        flexShrink: 0,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: SPACING.xs }}>
-            <div style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: cfg.primary, flexShrink: 0 }} />
-            <span style={{ fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.textPrimary }}>
-              {stage}
-            </span>
+      <div style={{padding:"12px 14px 10px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+            <div style={{width:"7px",height:"7px",borderRadius:"50%",backgroundColor:cfg.c,flexShrink:0,boxShadow:isDragOver?`0 0 6px ${cfg.c}`:"none",transition:"box-shadow 0.15s ease"}}/>
+            <span style={{fontFamily:FB,fontSize:"13px",fontWeight:600,color:C.text,whiteSpace:"nowrap"}}>{stage}</span>
           </div>
-          <span style={{
-            fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold,
-            color: cfg.primary, backgroundColor: cfg.bg,
-            borderRadius: RADIUS.full, padding: `1px ${SPACING.xs}`,
-            minWidth: "20px", textAlign: "center",
-          }}>
-            {leads.length}
-          </span>
+          <span style={{fontFamily:FB,fontSize:"11px",fontWeight:700,color:cfg.c,backgroundColor:cfg.bg,borderRadius:R.full,padding:"2px 8px",minWidth:"20px",textAlign:"center"}}>{leads.length}</span>
         </div>
-        {fmtTotal && (
-          <div style={{ fontSize: FONTS.size.xs, color: COLORS.textMuted }}>
-            {fmtTotal} pipeline
-          </div>
-        )}
+        {fmtTotal&&(<div style={{fontFamily:FB,fontSize:"11px",color:C.sub}}>{fmtTotal} pipeline</div>)}
       </div>
 
-      {/* Cards scroll area */}
-      <div style={{
-        padding: SPACING.sm,
-        overflowY: "auto",
-        display: "flex",
-        flexDirection: "column",
-        gap: SPACING.sm,
-        flexGrow: 1,
-        scrollbarWidth: "thin",
-        scrollbarColor: `${COLORS.scrollbarThumb} transparent`,
-      }}>
-        {leads.length === 0 && (
-          <div style={{
-            padding: SPACING.base, textAlign: "center",
-            color: COLORS.textMuted, fontSize: FONTS.size.xs,
-            border: `2px dashed ${isDragOver ? cfg.primary : COLORS.border}`,
-            borderRadius: RADIUS.md,
-            transition: "border-color 0.15s ease",
-          }}>
-            {isDragOver ? "Drop here" : "No leads"}
+      {/* Cards */}
+      <div style={{padding:"8px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"8px",flexGrow:1,scrollbarWidth:"thin",scrollbarColor:`${C.border} transparent`}}>
+        {leads.length===0&&(
+          <div style={{padding:"20px 12px",textAlign:"center",color:isDragOver?cfg.c:C.sub,fontFamily:FB,fontSize:"12px",border:`2px dashed ${isDragOver?cfg.c:C.border}`,borderRadius:R.md,transition:"all 0.15s ease"}}>
+            {isDragOver?"Drop here":"No leads"}
           </div>
         )}
-        {leads.map(lead => (
-          <LeadCard
-            key={lead.id}
-            lead={lead}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
-            isDragging={draggingId === lead.id}
-          />
+        {leads.map(l=>(
+          <LeadCard key={l.id} lead={l} onDragStart={onDragStart} onDragEnd={onDragEnd} isDragging={draggingId===l.id}/>
         ))}
-        {/* Drop zone at bottom when column has cards */}
-        {leads.length > 0 && isDragOver && (
-          <div style={{
-            height: "40px", border: `2px dashed ${cfg.primary}`,
-            borderRadius: RADIUS.md, flexShrink: 0,
-          }} />
-        )}
+        {leads.length>0&&isDragOver&&(<div style={{height:"36px",border:`2px dashed ${cfg.c}`,borderRadius:R.md,flexShrink:0,transition:"all 0.15s ease"}}/>)}
       </div>
     </div>
   );
 };
 
 // ─── PipelineKanban ───────────────────────────────────────────────────────────
+export const PipelineKanban=()=>{
+  const {companyId}=useAuth();
+  const [leads,setLeads]=useState([]);
+  const [stages,setStages]=useState(DEFAULT_STAGES);
+  const [loading,setLoading]=useState(true);
+  const [savingId,setSavingId]=useState(null);
+  const [toast,setToast]=useState(null);
 
-export const PipelineKanban = () => {
-  const { companyId } = useAuth();
+  const [draggingLead,setDraggingLead]=useState(null);
+  const [dragOverStage,setDragOverStage]=useState(null);
+  const dragCounterRef=useRef({});
 
-  const [leads, setLeads]         = useState([]);
-  const [stages, setStages]       = useState(DEFAULT_STAGES);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [savingId, setSavingId]   = useState(null); // id of lead being saved
+  const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),2500);};
 
-  // Drag state
-  const [draggingLead, setDraggingLead] = useState(null);   // lead object
-  const [dragOverStage, setDragOverStage] = useState(null); // stage string
-  const dragCounter = useRef({}); // per-stage counter to handle child dragenter/leave
+  // onSnapshot for leads + getDocs for custom stages
+  useEffect(()=>{
+    if(!companyId)return;
+    // Load custom stages once
+    getDocs(query(collection(db,COLLECTIONS.PIPELINE_STAGES),where("companyId","==",companyId),orderBy("order","asc")))
+      .then(snap=>{const cs=snap.docs.map(d=>d.data().name).filter(Boolean);if(cs.length>0)setStages(cs);});
 
-  // ── Loaders ─────────────────────────────────────────────────────────────
-  const loadData = useCallback(async () => {
-    if (!companyId) return;
-    try {
-      const [leadsSnap, stagesSnap] = await Promise.all([
-        getDocs(query(
-          collection(db, COLLECTIONS.LEADS),
-          where("companyId", "==", companyId),
-          orderBy("createdAt", "desc"),
-        )),
-        getDocs(query(
-          collection(db, COLLECTIONS.PIPELINE_STAGES),
-          where("companyId", "==", companyId),
-          orderBy("order", "asc"),
-        )),
-      ]);
-
-      setLeads(leadsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-
-      // Use custom stages if any exist, otherwise default
-      const customStages = stagesSnap.docs.map(d => d.data().name).filter(Boolean);
-      if (customStages.length > 0) setStages(customStages);
-
-    } catch (err) {
-      console.error("PipelineKanban: loadData error:", err);
-    }
-  }, [companyId]);
-
-  useEffect(() => {
-    setLoading(true);
-    loadData().finally(() => setLoading(false));
-  }, [loadData]);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
-  };
-
-  // ── Drag handlers ────────────────────────────────────────────────────────
-
-  const handleDragStart = (e, lead) => {
-    setDraggingLead(lead);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("leadId", lead.id);
-  };
-
-  const handleDragEnd = () => {
-    setDraggingLead(null);
-    setDragOverStage(null);
-    dragCounter.current = {};
-  };
-
-  const handleDragOver = (e, stage) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverStage(stage);
-  };
-
-  const handleDragEnter = (e, stage) => {
-    e.preventDefault();
-    dragCounter.current[stage] = (dragCounter.current[stage] || 0) + 1;
-    setDragOverStage(stage);
-  };
-
-  const handleDragLeave = (e, stage) => {
-    dragCounter.current[stage] = (dragCounter.current[stage] || 0) - 1;
-    if (dragCounter.current[stage] <= 0) {
-      dragCounter.current[stage] = 0;
-      if (dragOverStage === stage) setDragOverStage(null);
-    }
-  };
-
-  const handleDrop = async (e, targetStage) => {
-    e.preventDefault();
-    setDragOverStage(null);
-    dragCounter.current = {};
-
-    const lead = draggingLead;
-    setDraggingLead(null);
-
-    if (!lead || lead.stage === targetStage) return;
-
-    // Optimistic update
-    setLeads(prev =>
-      prev.map(l => l.id === lead.id ? { ...l, stage: targetStage } : l)
+    const unsub=onSnapshot(
+      query(collection(db,COLLECTIONS.LEADS),where("companyId","==",companyId),orderBy("createdAt","desc")),
+      snap=>{setLeads(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);},
+      err=>{console.error("PipelineKanban snap:",err);setLoading(false);}
     );
+    return()=>unsub();
+  },[companyId]);
 
-    // Persist to Firestore
+  // Drag handlers
+  const handleDragStart=useCallback((e,lead)=>{setDraggingLead(lead);e.dataTransfer.effectAllowed="move";},[]);
+  const handleDragEnd=useCallback(()=>{setDraggingLead(null);setDragOverStage(null);dragCounterRef.current={};},[]);
+  const handleDragEnter=useCallback((e,stage)=>{dragCounterRef.current[stage]=(dragCounterRef.current[stage]||0)+1;setDragOverStage(stage);},[]);
+  const handleDragLeave=useCallback((e,stage)=>{dragCounterRef.current[stage]=(dragCounterRef.current[stage]||0)-1;if((dragCounterRef.current[stage]||0)<=0){dragCounterRef.current[stage]=0;setDragOverStage(s=>s===stage?null:s);}},[]);
+
+  const handleDrop=useCallback(async(e,targetStage)=>{
+    e.preventDefault();setDragOverStage(null);dragCounterRef.current={};
+    const lead=draggingLead;setDraggingLead(null);
+    if(!lead||lead.stage===targetStage)return;
+
+    // Optimistic
+    setLeads(prev=>prev.map(l=>l.id===lead.id?{...l,stage:targetStage}:l));
     setSavingId(lead.id);
-    try {
-      await updateDoc(doc(db, COLLECTIONS.LEADS, lead.id), {
-        stage: targetStage,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.error("PipelineKanban: stage update error:", err);
-      // Rollback
-      setLeads(prev =>
-        prev.map(l => l.id === lead.id ? { ...l, stage: lead.stage } : l)
-      );
-    } finally {
-      setSavingId(null);
-    }
-  };
+    try{
+      await updateDoc(doc(db,COLLECTIONS.LEADS,lead.id),{stage:targetStage,updatedAt:serverTimestamp()});
+      showToast(`Moved to ${targetStage}`);
+    }catch(err){
+      console.error("PipelineKanban drop:",err);
+      setLeads(prev=>prev.map(l=>l.id===lead.id?{...l,stage:lead.stage}:l));
+      showToast("Failed to save — reverted","error");
+    }finally{setSavingId(null);}
+  },[draggingLead]);
 
-  // ── Group leads by stage ─────────────────────────────────────────────────
-  const leadsByStage = stages.reduce((map, stage) => {
-    map[stage] = leads.filter(l => l.stage === stage);
-    return map;
-  }, {});
+  // Group leads
+  const leadsByStage=useMemo(()=>stages.reduce((m,s)=>{m[s]=leads.filter(l=>l.stage===s);return m;},{}),[ leads,stages]);
 
-  // ── Board summary ────────────────────────────────────────────────────────
-  const totalValue = leads.reduce((s, l) => s + (l.dealValue || 0), 0);
-  const totalHot   = leads.filter(l => l.leadScore === "hot").length;
+  const totalLeads=leads.length;
+  const totalVal=leads.reduce((s,l)=>s+(l.dealValue||0),0);
+  const hotCount=leads.filter(l=>l.leadScore==="hot").length;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────────────
-
-  return (
-    <div style={{
-      backgroundColor: COLORS.background,
-      height: "calc(100vh - 60px)",
-      display: "flex", flexDirection: "column",
-      fontFamily: FONTS.family, overflow: "hidden",
-      boxSizing: "border-box",
-    }}>
+  return(
+    <div style={{backgroundColor:C.bg,height:"100vh",display:"flex",flexDirection:"column",fontFamily:FB,overflow:"hidden",boxSizing:"border-box"}}>
       <style>{`
-        @keyframes tirasSpinKf { from{transform:rotate(0)} to{transform:rotate(360deg)} }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: ${COLORS.scrollbarThumb}; border-radius: 3px; }
+        @keyframes v2Shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+        @keyframes v2SlideIn{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes v2Spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        ::-webkit-scrollbar{width:5px;height:5px;}
+        ::-webkit-scrollbar-track{background:transparent;}
+        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}
       `}</style>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div style={{
-        padding: `${SPACING.lg} ${SPACING["2xl"]}`,
-        borderBottom: `1px solid ${COLORS.border}`,
-        display: "flex", alignItems: "center",
-        justifyContent: "space-between", flexWrap: "wrap",
-        gap: SPACING.base, flexShrink: 0,
-        backgroundColor: COLORS.background,
-      }}>
+      {/* Header */}
+      <div style={{padding:"16px 24px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,backgroundColor:C.bg,flexWrap:"wrap",gap:"10px"}}>
         <div>
-          <h1 style={{ margin: 0, fontSize: FONTS.size["3xl"], fontWeight: FONTS.weight.bold, color: COLORS.textPrimary, letterSpacing: "-0.5px" }}>
-            Pipeline
-          </h1>
-          {!loading && (
-            <p style={{ margin: `${SPACING.xs} 0 0`, fontSize: FONTS.size.sm, color: COLORS.textSecondary }}>
-              {leads.length} leads ·{" "}
-              <span style={{ color: COLORS.accent }}>
-                {formatINR(totalValue)} total pipeline
-              </span>
-              {totalHot > 0 && (
-                <> · <span style={{ color: COLORS.hot }}>🔥 {totalHot} hot</span></>
-              )}
+          <h1 style={{margin:0,fontFamily:FH,fontSize:"clamp(22px,2.5vw,30px)",fontWeight:700,color:C.text,letterSpacing:"-0.5px"}}>Pipeline</h1>
+          {!loading&&(
+            <p style={{margin:"3px 0 0",fontFamily:FB,fontSize:"13px",color:C.sub}}>
+              {totalLeads} leads ·{" "}
+              <span style={{color:C.gold}}>{totalVal>=100000?`₹${(totalVal/100000).toFixed(1)}L`:totalVal>=1000?`₹${(totalVal/1000).toFixed(1)}K`:`₹${totalVal}`} pipeline</span>
+              {hotCount>0&&<> · <span style={{color:"#FF6B35"}}>🔥 {hotCount} hot</span></>}
             </p>
           )}
         </div>
-
-        <div style={{ display: "flex", gap: SPACING.sm, alignItems: "center" }}>
-          {savingId && (
-            <span style={{ fontSize: FONTS.size.sm, color: COLORS.textMuted, display: "flex", alignItems: "center", gap: "4px" }}>
-              <RiLoader4Line size={13} style={{ animation: "tirasSpinKf 0.8s linear infinite" }} />
-              Saving…
-            </span>
-          )}
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing || loading}
-            style={{ ...STYLES.buttonSecondary, padding: `${SPACING.sm} ${SPACING.md}`, display: "flex", alignItems: "center", gap: SPACING.xs, opacity: refreshing ? 0.4 : 1 }}
-          >
-            <RiRefreshLine size={15} style={{ animation: refreshing ? "tirasSpinKf 0.7s linear infinite" : "none" }} />
-          </button>
-          <button style={{ ...STYLES.buttonPrimary, display: "flex", alignItems: "center", gap: SPACING.xs }}>
-            <RiAddLine size={16} /> Add Lead
-          </button>
+        <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+          {savingId&&(<span style={{fontFamily:FB,fontSize:"12px",color:C.sub,display:"flex",alignItems:"center",gap:"5px"}}><RiLoader4Line size={13} style={{animation:"v2Spin 0.8s linear infinite"}}/>Saving…</span>)}
+          <button style={{backgroundColor:C.gold,color:"#000",border:"none",borderRadius:R.md,fontFamily:FB,fontSize:"13px",fontWeight:700,padding:"8px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"5px",minHeight:"40px"}}><RiAddLine size={14}/>Add Lead</button>
         </div>
       </div>
 
-      {/* ── Board ───────────────────────────────────────────────────────── */}
-      {loading ? (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: SPACING.md }}>
-          <RiLoader4Line size={32} color={COLORS.textMuted} style={{ animation: "tirasSpinKf 1s linear infinite" }} />
-          <span style={{ color: COLORS.textMuted, fontSize: FONTS.size.sm }}>Loading pipeline…</span>
+      {/* Board */}
+      {loading?(
+        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"12px"}}>
+          <RiLoader4Line size={28} color={C.sub} style={{animation:"v2Spin 1s linear infinite"}}/>
+          <span style={{fontFamily:FB,fontSize:"13px",color:C.sub}}>Loading pipeline…</span>
         </div>
-      ) : (
-        <div style={{
-          flex: 1, overflowX: "auto", overflowY: "hidden",
-          padding: `${SPACING.lg} ${SPACING["2xl"]}`,
-          display: "flex", gap: SPACING.base, alignItems: "flex-start",
-        }}>
-          {stages.map(stage => (
+      ):(
+        <div style={{flex:1,overflowX:"auto",overflowY:"hidden",padding:"16px 24px",display:"flex",gap:"12px",alignItems:"flex-start",minHeight:0}}>
+          {stages.map(stage=>(
             <StageColumn
-              key={stage}
-              stage={stage}
-              leads={leadsByStage[stage] || []}
-              isDragOver={dragOverStage === stage}
+              key={stage} stage={stage}
+              leads={leadsByStage[stage]||[]}
+              isDragOver={dragOverStage===stage}
               draggingId={draggingLead?.id}
               onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
-              onDragOver={(e) => handleDragOver(e, stage)}
-              onDragEnter={(e) => handleDragEnter(e, stage)}
-              onDragLeave={(e) => handleDragLeave(e, stage)}
-              onDrop={(e) => handleDrop(e, stage)}
+              onDragOver={()=>setDragOverStage(stage)}
+              onDragEnter={e=>handleDragEnter(e,stage)}
+              onDragLeave={e=>handleDragLeave(e,stage)}
+              onDrop={e=>handleDrop(e,stage)}
             />
           ))}
         </div>
       )}
+
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
     </div>
   );
 };
