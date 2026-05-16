@@ -17,6 +17,7 @@ import {
   RiCalendarLine, RiLoader4Line, RiDownloadLine,
   RiBarChartBoxLine, RiFundsLine, RiPercentLine,
   RiCheckboxCircleLine, RiRefreshLine, RiTeamLine,
+  RiPhoneLine,
 } from "react-icons/ri";
 
 // ─── V2 tokens ────────────────────────────────────────────────────────────────
