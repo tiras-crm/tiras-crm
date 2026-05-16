@@ -6,6 +6,8 @@
 // In src/pages/index.js replace the placeholder with:
 //   export { AdminDashboard } from "./AdminDashboard";
 
+import { AnnouncementBanner } from "../../components/UI/AnnouncementBanner";<AnnouncementBanner />
+// Then inside return, first line before stat cards:
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   collection, query, where, doc,
