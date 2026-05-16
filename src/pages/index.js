@@ -164,3 +164,4 @@ export { SupportTicketCreateView } from "./SupportTicketCreateView";
 export { HelpCenter } from "./HelpCenter";
 export { LandingPage } from "./LandingPage";
 export { PricingPage } from "./PricingPage";
+export { AnnouncementsManager } from "./AnnouncementsManager";
