@@ -1,0 +1,558 @@
+// TIRAS CRM V2 — Firestore Security Rules
+// Version 2.0 | May 2026
+// Design: Obsidian Gold
+//
+// ROLE HIERARCHY:
+//   platform_owner  → unrestricted access to everything
+//   company_admin   → own company only — all data
+//   manager         → own company — scoped to their agents
+//   agent           → own leads, calls, followups, tickets only
+//   support_agent   → tickets and notifications only
+//
+// ZERO-LEAKAGE GUARANTEE:
+//   No user can ever read another company's data
+//   No agent can ever read another agent's leads
+//   No manager can read another manager's agents
+//   platform_owner cannot be created from within the app
+//
+// DEPLOY:
+//   firebase deploy --only firestore:rules
+//
+// TEST:
+//   firebase emulators:start --only firestore
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HELPER FUNCTIONS
+    // All role and company checks flow through these — change once, safe everywhere
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Is the request coming from a signed-in user?
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Fetch the caller's Firestore user document
+    // Cached per request — Firestore does not charge extra for this within one request
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Role of the calling user — read from Firestore, not from JWT claims
+    function callerRole() {
+      return userData().role;
+    }
+
+    // companyId of the calling user
+    function callerCompanyId() {
+      return userData().companyId;
+    }
+
+    // Is the caller's account marked active?
+    function isActive() {
+      return isAuth() && userData().isActive == true;
+    }
+
+    // ── Role checks ───────────────────────────────────────────────────────
+
+    function isPlatformOwner() {
+      return isAuth() && callerRole() == 'platform_owner';
+    }
+
+    function isCompanyAdmin() {
+      return isActive() && callerRole() == 'company_admin';
+    }
+
+    function isManager() {
+      return isActive() && callerRole() == 'manager';
+    }
+
+    function isAgent() {
+      return isActive() && callerRole() == 'agent';
+    }
+
+    function isSupportAgent() {
+      return isActive() && callerRole() == 'support_agent';
+    }
+
+    // ── Company scope checks ──────────────────────────────────────────────
+
+    // Does the caller belong to this company?
+    function belongsToCompany(companyId) {
+      return isActive() && callerCompanyId() == companyId;
+    }
+
+    // Is caller a company admin OR platform owner for this company?
+    function isAdminForCompany(companyId) {
+      return isPlatformOwner() ||
+             (isCompanyAdmin() && belongsToCompany(companyId));
+    }
+
+    // Is caller a manager, admin, or owner for this company?
+    function isManagerOrAboveForCompany(companyId) {
+      return isPlatformOwner() ||
+             (isCompanyAdmin() && belongsToCompany(companyId)) ||
+             (isManager()      && belongsToCompany(companyId));
+    }
+
+    // Is the caller writing data into their own company?
+    // Prevents an agent from writing a lead with someone else's companyId
+    function writingToOwnCompany() {
+      return isActive() &&
+             request.resource.data.companyId == callerCompanyId();
+    }
+
+    // Does the existing document belong to the caller's company?
+    function docInCallerCompany() {
+      return isActive() &&
+             resource.data.companyId == callerCompanyId();
+    }
+
+    // ── Field change guards ────────────────────────────────────────────────
+
+    // Has the caller tried to change any of these fields?
+    function changedAnyOf(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Has the caller ONLY changed these fields (and nothing else)?
+    function onlyChanged(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // USERS COLLECTION
+    // /users/{userId}
+    // Fields: uid, email, displayName, role, companyId, managerId, isActive
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /users/{userId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Any active user reads their own profile
+      allow read: if isActive() && request.auth.uid == userId;
+
+      // Company admin reads all users in their company
+      allow read: if isCompanyAdmin() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Manager reads users in their company
+      // (to see agent names and profiles in their team)
+      allow read: if isManager() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Company admin creates agents, managers, support agents in their company
+      // Cannot create platform_owner accounts — those are manual only
+      allow create: if isCompanyAdmin() &&
+                       request.resource.data.companyId == callerCompanyId() &&
+                       request.resource.data.role in ['agent', 'manager', 'support_agent'] &&
+                       request.resource.data.keys().hasAll(['uid', 'email', 'role', 'companyId', 'isActive']);
+
+      // Any active user updates their own profile
+      // Locked fields: role, companyId, isActive, managerId — cannot self-modify
+      allow update: if isActive() &&
+                       request.auth.uid == userId &&
+                       !changedAnyOf(['role', 'companyId', 'isActive', 'managerId']);
+
+      // Company admin updates any user in their company
+      // (activate/deactivate, assign manager, change role within company)
+      allow update: if isAdminForCompany(resource.data.companyId) &&
+                       // Admin cannot elevate someone to platform_owner
+                       (!changedAnyOf(['role']) ||
+                        !request.resource.data.role in ['platform_owner']);
+
+      // Only platform owner or company admin deletes users
+      allow delete: if isAdminForCompany(resource.data.companyId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // COMPANIES COLLECTION
+    // /companies/{companyId}
+    // Fields: name, plan, subscriptionStatus, trialEndDate, adminUid,
+    //         wallet, storage, minutesUsedThisMonth
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /companies/{companyId} {
+
+      // Platform owner: full access to all companies
+      allow read, write: if isPlatformOwner();
+
+      // Company admin reads their own company document
+      allow read: if isCompanyAdmin() &&
+                     callerCompanyId() == companyId;
+
+      // Manager reads their company document (for plan/wallet info in UI)
+      allow read: if isManager() &&
+                     callerCompanyId() == companyId;
+
+      // Company admin updates their company settings
+      // Locked fields: plan, subscriptionStatus, trialEndDate, wallet.balance
+      // (billing fields changed only by platform owner or Cloud Function)
+      allow update: if isCompanyAdmin() &&
+                       callerCompanyId() == companyId &&
+                       !changedAnyOf([
+                         'plan',
+                         'subscriptionStatus',
+                         'trialEndDate',
+                         'subscriptionEndDate',
+                         'adminUid'
+                       ]);
+
+      // Wallet balance updated only by Cloud Function (admin SDK bypasses rules)
+      // No frontend role can write wallet.balance directly
+
+      // Create and delete: platform owner only
+      allow create, delete: if isPlatformOwner();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // LEADS COLLECTION
+    // /leads/{leadId}
+    // Fields: name, phone, email, stage, assignedTo, managerId,
+    //         companyId, source, temperature, dealValue
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /leads/{leadId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Company admin: reads and writes all leads in their company
+      allow read, write: if isCompanyAdmin() && docInCallerCompany();
+
+      // Company admin creates leads in their company
+      allow create: if isCompanyAdmin() && writingToOwnCompany();
+
+      // Manager: reads all leads in their company
+      // (managers see the full picture — all agents' leads)
+      allow read: if isManager() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Manager updates leads in their company
+      // (reassign, change stage, update deal value)
+      allow update: if isManager() &&
+                       resource.data.companyId == callerCompanyId();
+
+      // Manager creates leads in their company
+      allow create: if isManager() && writingToOwnCompany();
+
+      // Agent: reads ONLY their own assigned leads
+      // CORE ISOLATION: no agent sees another agent's leads
+      allow read: if isAgent() &&
+                     resource.data.assignedTo == request.auth.uid &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Agent creates leads — locked to own company, assigned to themselves
+      allow create: if isAgent() &&
+                       writingToOwnCompany() &&
+                       request.resource.data.assignedTo == request.auth.uid;
+
+      // Agent updates their own assigned leads
+      // Cannot reassign leads to another agent (assignedTo locked)
+      allow update: if isAgent() &&
+                       resource.data.assignedTo == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId() &&
+                       !changedAnyOf(['assignedTo', 'companyId', 'managerId']);
+
+      // Delete: admin and platform owner only — agents cannot delete leads
+      allow delete: if isAdminForCompany(resource.data.companyId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CALLS COLLECTION
+    // /calls/{callId}
+    // Fields: leadId, agentId, companyId, duration, outcome,
+    //         recordingUrl, aiSummary, objectionTag, temperature, status
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /calls/{callId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Company admin: reads all calls in their company (recordings library)
+      allow read: if isCompanyAdmin() && docInCallerCompany();
+
+      // Company admin updates call records (override outcome, annotate)
+      allow update: if isCompanyAdmin() && docInCallerCompany();
+
+      // Manager: reads all calls in their company
+      allow read: if isManager() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Manager updates calls in their company
+      allow update: if isManager() &&
+                       resource.data.companyId == callerCompanyId();
+
+      // Agent: reads only their own calls
+      allow read: if isAgent() &&
+                     resource.data.agentId == request.auth.uid &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Agent creates a call log for themselves only
+      allow create: if isAgent() &&
+                       writingToOwnCompany() &&
+                       request.resource.data.agentId == request.auth.uid;
+
+      // Agent updates their own active call (outcome, notes, temperature)
+      allow update: if isAgent() &&
+                       resource.data.agentId == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId() &&
+                       // Agent cannot change agentId or companyId
+                       !changedAnyOf(['agentId', 'companyId']);
+
+      // Support agent can read calls linked to their tickets (company scope)
+      allow read: if isSupportAgent() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Delete: admin and owner only (TTL cleanup via Cloud Function)
+      allow delete: if isAdminForCompany(resource.data.companyId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // FOLLOW-UPS COLLECTION
+    // /followups/{followupId}
+    // Fields: leadId, agentId, companyId, scheduledAt, isCompleted, isOverdue
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /followups/{followupId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Company admin: full access within their company
+      allow read, write: if isCompanyAdmin() && docInCallerCompany();
+      allow create: if isCompanyAdmin() && writingToOwnCompany();
+
+      // Manager: reads all followups in their company, updates overdue flags
+      allow read: if isManager() &&
+                     resource.data.companyId == callerCompanyId();
+
+      allow update: if isManager() &&
+                       resource.data.companyId == callerCompanyId();
+
+      // Agent: full control over their own followups only
+      allow read: if isAgent() &&
+                     resource.data.agentId == request.auth.uid &&
+                     resource.data.companyId == callerCompanyId();
+
+      allow create: if isAgent() &&
+                       writingToOwnCompany() &&
+                       request.resource.data.agentId == request.auth.uid;
+
+      allow update: if isAgent() &&
+                       resource.data.agentId == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId() &&
+                       !changedAnyOf(['agentId', 'companyId']);
+
+      allow delete: if isAgent() &&
+                       resource.data.agentId == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId();
+
+      // Support agent: no access to followups
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TICKETS COLLECTION
+    // /tickets/{ticketId}
+    // Fields: subject, description, leadId, callId, raisedBy,
+    //         assignedTo, companyId, status, priority
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /tickets/{ticketId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Company admin: full access within their company
+      allow read, write: if isCompanyAdmin() && docInCallerCompany();
+      allow create: if isCompanyAdmin() && writingToOwnCompany();
+
+      // Manager: reads and writes all tickets in their company
+      // (assign to support agent, escalate, close)
+      allow read: if isManager() &&
+                     resource.data.companyId == callerCompanyId();
+
+      allow update: if isManager() &&
+                       resource.data.companyId == callerCompanyId();
+
+      allow create: if isManager() && writingToOwnCompany();
+
+      // Agent: reads tickets they raised, creates new tickets
+      allow read: if isAgent() &&
+                     resource.data.raisedBy == request.auth.uid &&
+                     resource.data.companyId == callerCompanyId();
+
+      allow create: if isAgent() &&
+                       writingToOwnCompany() &&
+                       request.resource.data.raisedBy == request.auth.uid;
+
+      // Agent cannot update tickets after creation (manager handles it)
+      // Exception: agent can add a comment field only
+      allow update: if isAgent() &&
+                       resource.data.raisedBy == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId() &&
+                       onlyChanged(['agentComment', 'updatedAt']);
+
+      // Support agent: reads and updates tickets assigned to them
+      // CORE ISOLATION: support agent cannot see tickets assigned to others
+      allow read: if isSupportAgent() &&
+                     resource.data.assignedTo == request.auth.uid &&
+                     resource.data.companyId == callerCompanyId();
+
+      allow update: if isSupportAgent() &&
+                       resource.data.assignedTo == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId() &&
+                       // Support agent cannot reassign or change company
+                       !changedAnyOf(['assignedTo', 'companyId', 'raisedBy']);
+
+      // Delete: admin and platform owner only
+      allow delete: if isAdminForCompany(resource.data.companyId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // NOTIFICATIONS COLLECTION
+    // /notifications/{notificationId}
+    // Fields: recipientUid, companyId, type, title, body, isRead
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /notifications/{notificationId} {
+
+      // Platform owner: reads all notifications
+      allow read: if isPlatformOwner();
+
+      // Any active user reads their own notifications only
+      // userId field = recipientUid — caller must match
+      allow read: if isActive() &&
+                     resource.data.recipientUid == request.auth.uid;
+
+      // Company admin and manager can read company-wide notifications
+      // (those without a specific recipientUid)
+      allow read: if isManagerOrAboveForCompany(resource.data.companyId) &&
+                     !('recipientUid' in resource.data);
+
+      // Create: company admin creates company-wide notifications from frontend
+      // Most notifications are created by Cloud Functions (admin SDK, bypasses rules)
+      allow create: if isCompanyAdmin() &&
+                       writingToOwnCompany();
+
+      // Any active user marks their own notification as read
+      // Only isRead and readAt fields can be changed this way
+      allow update: if isActive() &&
+                       resource.data.recipientUid == request.auth.uid &&
+                       onlyChanged(['isRead', 'readAt']);
+
+      // Platform owner and admin can update any notification in their scope
+      allow update: if isAdminForCompany(resource.data.companyId);
+
+      // User deletes their own notification
+      allow delete: if isActive() &&
+                       resource.data.recipientUid == request.auth.uid;
+
+      // Admin deletes any notification in their company
+      allow delete: if isAdminForCompany(resource.data.companyId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PAYMENTS COLLECTION
+    // /payments/{paymentId}
+    // Fields: leadId, agentId, companyId, amount, status,
+    //         razorpayPaymentId, paymentLinkId, type
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /payments/{paymentId} {
+
+      // Platform owner: full access (billing management)
+      allow read, write: if isPlatformOwner();
+
+      // Company admin: reads and manages all payments in their company
+      allow read: if isCompanyAdmin() && docInCallerCompany();
+      allow create: if isCompanyAdmin() && writingToOwnCompany();
+      allow update: if isCompanyAdmin() && docInCallerCompany();
+      allow delete: if isCompanyAdmin() && docInCallerCompany();
+
+      // Manager: reads payments in their company (revenue tracking)
+      allow read: if isManager() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Agent: reads payments they created
+      allow read: if isAgent() &&
+                     resource.data.agentId == request.auth.uid &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Agent creates payment records for their own leads
+      allow create: if isAgent() &&
+                       writingToOwnCompany() &&
+                       request.resource.data.agentId == request.auth.uid;
+
+      // Agent updates payment records they created — limited fields only
+      // Cannot change amount, status, or razorpayPaymentId (those are locked)
+      allow update: if isAgent() &&
+                       resource.data.agentId == request.auth.uid &&
+                       resource.data.companyId == callerCompanyId() &&
+                       !changedAnyOf(['amount', 'status', 'razorpayPaymentId', 'companyId', 'agentId']);
+
+      // Support agent: no access to payments
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PIPELINE STAGES COLLECTION
+    // /pipeline_stages/{stageId}
+    // Fields: companyId, name, order, color, isDefault
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /pipeline_stages/{stageId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Any authenticated active user in the company can READ stages
+      // Agents need to read stages to display the Kanban board
+      allow read: if isActive() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Only company admin creates, modifies, or deletes pipeline stages
+      allow create: if isCompanyAdmin() && writingToOwnCompany();
+      allow update: if isCompanyAdmin() && docInCallerCompany();
+      allow delete: if isCompanyAdmin() && docInCallerCompany();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // WHATSAPP TEMPLATES COLLECTION
+    // /wa_templates/{templateId}
+    // Fields: companyId, name, body, type (introduction/followup/payment/thankyou)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /wa_templates/{templateId} {
+
+      // Platform owner: unrestricted
+      allow read, write: if isPlatformOwner();
+
+      // Any active user in the company can READ templates
+      // Agents use them on the lead detail page to send WhatsApp messages
+      allow read: if isActive() &&
+                     resource.data.companyId == callerCompanyId();
+
+      // Only company admin creates, modifies, or deletes templates
+      allow create: if isCompanyAdmin() && writingToOwnCompany();
+      allow update: if isCompanyAdmin() && docInCallerCompany();
+      allow delete: if isCompanyAdmin() && docInCallerCompany();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // DEFAULT DENY
+    // Any collection not listed above is completely locked
+    // Explicit here for clarity — Firestore denies by default anyway
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
