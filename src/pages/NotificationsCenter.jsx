@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   collection,
   query,
@@ -8,581 +8,487 @@ import {
   doc,
   updateDoc,
   writeBatch,
-  getDocs,
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, COLLECTIONS } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 
-// ── Icon primitives ──────────────────────────────────────────────────────────
-const Icon = ({ d, size = 18, color = "currentColor", ...rest }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke={color}
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-    {...rest}
-  >
+/* ─────────────────────────────────────────────────────────────────────────────
+   TIRAS CRM V2 — NotificationsCenter
+   Theme: Obsidian Gold  |  Route: /notifications  |  All roles
+   Real-time Firestore · Category tabs · Mark read · Low-balance alert banner
+───────────────────────────────────────────────────────────────────────────── */
+
+const C = {
+  bg:         "#121212",
+  surface:    "#1A1A1B",
+  surfaceHov: "#222223",
+  border:     "#2A2A2B",
+  gold:       "#D4AF37",
+  goldMuted:  "rgba(212,175,55,0.12)",
+  red:        "#E63946",
+  redMuted:   "rgba(230,57,70,0.12)",
+  green:      "#10B981",
+  greenMuted: "rgba(16,185,129,0.12)",
+  blue:       "#3B82F6",
+  blueMuted:  "rgba(59,130,246,0.12)",
+  text:       "#F5F5F5",
+  textSec:    "#9A9A9A",
+  textMuted:  "#555555",
+};
+
+// ── Inject global styles once ─────────────────────────────────────────────────
+const STYLE_ID = "tiras-v2-nc";
+if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
+  const s = document.createElement("style");
+  s.id = STYLE_ID;
+  s.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600;700&display=swap');
+
+    @keyframes nc-up { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes nc-shimmer { 0% { background-position:-400px 0; } 100% { background-position:400px 0; } }
+    @keyframes nc-toast-in  { from { transform:translateX(110%); opacity:0; } to { transform:translateX(0); opacity:1; } }
+    @keyframes nc-toast-out { from { transform:translateX(0); opacity:1; } to { transform:translateX(110%); opacity:0; } }
+
+    .nc-skel {
+      background: linear-gradient(90deg,#1A1A1B 25%,#222223 50%,#1A1A1B 75%);
+      background-size:400px 100%; animation:nc-shimmer 1.4s infinite; border-radius:6px;
+    }
+    .nc-up { animation: nc-up .42s ease both; }
+
+    .nc-row { transition: background .14s, transform .14s, box-shadow .14s; }
+    .nc-row:hover { background: #222223 !important; }
+    .nc-row.unread:hover { transform: translateX(3px); }
+    .nc-row:focus-visible { outline: 2px solid #D4AF37; outline-offset: 2px; }
+
+    .nc-tab { transition: all .14s; border:none; cursor:pointer; }
+    .nc-tab:hover { color:#D4AF37 !important; }
+
+    .nc-mark { transition: all .14s; }
+    .nc-mark:hover { background:rgba(212,175,55,0.12) !important; color:#D4AF37 !important; border-color:#D4AF37 !important; }
+
+    .nc-toast {
+      position:fixed; bottom:24px; right:24px; z-index:9999;
+      display:flex; align-items:center; gap:10px;
+      padding:12px 18px; border-radius:10px;
+      font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600;
+      box-shadow:0 8px 32px rgba(0,0,0,.5);
+      animation:nc-toast-in .3s ease both;
+    }
+
+    @media (max-width:640px) {
+      .nc-tabs { overflow-x:auto; scrollbar-width:none; flex-wrap:nowrap !important; padding-bottom:4px; }
+      .nc-header { flex-direction:column !important; align-items:flex-start !important; }
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+// ── Icon ──────────────────────────────────────────────────────────────────────
+const Ic = ({ d, s = 16, c = "currentColor", fill = "none" }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill={fill}
+    stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+    style={{ flexShrink: 0 }} aria-hidden="true">
     <path d={d} />
   </svg>
 );
 
-const ICONS = {
-  bell:       "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0",
-  check:      "M20 6L9 17l-5-5",
-  checkAll:   "M2 12l5 5L22 4M9 17l-5-5",
-  phone:      "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13 19.79 19.79 0 0 1 1.61 4.37 2 2 0 0 1 3.6 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9.91a16 16 0 0 0 6.18 6.18l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 17v-.08z",
-  userPlus:   "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M12 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6",
-  ticket:     "M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z",
-  calendar:   "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 0 2-2z",
-  mic:        "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8",
-  dollar:     "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
-  inbox:      "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
-  chevronRight: "M9 18l6-6-6-6",
+const D = {
+  bell:      "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0",
+  check:     "M20 6L9 17l-5-5",
+  checkAll:  "M2 12l5 5L22 4M9 17l-5-5",
+  calendar:  "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 0 2-2z",
+  user:      "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  ticket:    "M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z",
+  mic:       "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8",
+  dollar:    "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
+  alert:     "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
+  inbox:     "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+  wallet:    "M21 12V7H5a2 2 0 0 1 0-4h14v4M21 12a2 2 0 0 1 0 4H5a2 2 0 0 1 0-4h16v4",
+  zap:       "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+  x:         "M18 6L6 18M6 6l12 12",
 };
 
-// ── Category config ──────────────────────────────────────────────────────────
-const CATEGORIES = {
-  all:            { label: "All",          icon: ICONS.bell },
-  follow_up:      { label: "Follow-ups",   icon: ICONS.calendar },
-  lead_assigned:  { label: "Leads",        icon: ICONS.userPlus },
-  ticket_update:  { label: "Tickets",      icon: ICONS.ticket },
-  recording_ready:{ label: "Recordings",   icon: ICONS.mic },
-  payment:        { label: "Payments",     icon: ICONS.dollar },
+// ── Type config ───────────────────────────────────────────────────────────────
+const TYPE_CFG = {
+  follow_up:       { label: "Follow-up",   icon: D.calendar, color: C.gold,  bg: C.goldMuted  },
+  lead_assigned:   { label: "Lead",        icon: D.user,     color: C.blue,  bg: C.blueMuted  },
+  ticket_update:   { label: "Ticket",      icon: D.ticket,   color: C.red,   bg: C.redMuted   },
+  recording_ready: { label: "Recording",   icon: D.mic,      color: C.green, bg: C.greenMuted },
+  payment:         { label: "Payment",     icon: D.dollar,   color: C.green, bg: C.greenMuted },
+  low_balance:     { label: "Wallet",      icon: D.wallet,   color: C.red,   bg: C.redMuted   },
+  system:          { label: "System",      icon: D.zap,      color: C.gold,  bg: C.goldMuted  },
 };
 
-function categoryIcon(type) {
-  switch (type) {
-    case "follow_up":       return ICONS.calendar;
-    case "lead_assigned":   return ICONS.userPlus;
-    case "ticket_update":   return ICONS.ticket;
-    case "recording_ready": return ICONS.mic;
-    case "payment":         return ICONS.dollar;
-    default:                return ICONS.bell;
-  }
-}
+const TABS = [
+  { key: "all",             label: "All",        icon: D.bell     },
+  { key: "follow_up",       label: "Follow-ups", icon: D.calendar },
+  { key: "lead_assigned",   label: "Leads",      icon: D.user     },
+  { key: "ticket_update",   label: "Tickets",    icon: D.ticket   },
+  { key: "recording_ready", label: "Recordings", icon: D.mic      },
+  { key: "low_balance",     label: "Wallet",     icon: D.wallet   },
+];
 
-function categoryColor(type) {
-  switch (type) {
-    case "follow_up":       return "#F2A65A";
-    case "lead_assigned":   return "#5AB4F2";
-    case "ticket_update":   return "#E05C5C";
-    case "recording_ready": return "#7DD87D";
-    case "payment":         return "#B65E3C";
-    default:                return "#AAAAAA";
-  }
-}
-
-function timeAgo(ts) {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const timeAgo = (ts) => {
   if (!ts) return "";
-  const date = ts?.toDate ? ts.toDate() : new Date(ts);
-  const diff = Math.floor((Date.now() - date) / 1000);
-  if (diff < 60)  return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
+  const d = ts?.toDate ? ts.toDate() : new Date(ts);
+  const diff = Math.floor((Date.now() - d) / 1000);
+  if (diff < 60)     return "just now";
+  if (diff < 3600)   return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400)  return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+};
 
-// ── Main Component ───────────────────────────────────────────────────────────
+// ── Toast hook ────────────────────────────────────────────────────────────────
+const useToast = () => {
+  const [t, setT] = useState(null);
+  const show = useCallback((msg, type = "success") => {
+    setT({ msg, type });
+    setTimeout(() => setT(null), 3200);
+  }, []);
+  return [t, show];
+};
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+const Toast = ({ t }) => {
+  if (!t) return null;
+  const err = t.type === "error";
+  return (
+    <div className="nc-toast" style={{
+      background: err ? "#2A1215" : "#0F2A1E",
+      border: `1px solid ${err ? C.red : C.green}44`,
+      color: err ? C.red : C.green,
+    }}>
+      <Ic d={err ? D.alert : D.check} s={14} c={err ? C.red : C.green} />
+      {t.msg}
+    </div>
+  );
+};
+
+const SectionLabel = ({ label, dot }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, paddingLeft: 2 }}>
+    <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+    <span style={{
+      fontFamily: "DM Sans, sans-serif", fontSize: 10, fontWeight: 700,
+      color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.8px",
+    }}>{label}</span>
+  </div>
+);
+
+const Skeleton = () => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    {[...Array(6)].map((_, i) => (
+      <div key={i} style={{
+        display: "flex", alignItems: "center", gap: 14,
+        padding: "16px 18px", borderRadius: 12,
+        background: C.surface, border: `1px solid ${C.border}`,
+      }}>
+        <div className="nc-skel" style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0 }} />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="nc-skel" style={{ height: 10, width: "26%" }} />
+          <div className="nc-skel" style={{ height: 13, width: "70%" }} />
+          <div className="nc-skel" style={{ height: 10, width: "38%" }} />
+        </div>
+        <div className="nc-skel" style={{ width: 9, height: 9, borderRadius: "50%", flexShrink: 0 }} />
+      </div>
+    ))}
+  </div>
+);
+
+const EmptyState = ({ tab }) => {
+  const cfg = TYPE_CFG[tab];
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", alignItems: "center",
+      padding: "80px 24px", gap: 14, textAlign: "center",
+    }}>
+      <div style={{
+        width: 70, height: 70, borderRadius: "50%",
+        background: C.goldMuted, border: `1px solid ${C.gold}30`,
+        display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6,
+      }}>
+        <Ic d={cfg?.icon ?? D.inbox} s={30} c={C.gold} />
+      </div>
+      <p style={{ fontFamily: "Playfair Display, serif", fontWeight: 700, fontSize: 17, color: C.text, margin: 0 }}>
+        No notifications
+      </p>
+      <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: C.textSec, maxWidth: 280, lineHeight: 1.6, margin: 0 }}>
+        {tab === "all"
+          ? "You're all caught up. New alerts appear here automatically."
+          : `No ${cfg?.label?.toLowerCase() ?? ""} notifications yet.`}
+      </p>
+    </div>
+  );
+};
+
+const NotifRow = ({ notif, onRead, delay }) => {
+  const cfg = TYPE_CFG[notif.type] ?? TYPE_CFG.system;
+  const isLowBal = notif.type === "low_balance";
+
+  return (
+    <div
+      className={`nc-row nc-up ${notif.read ? "" : "unread"}`}
+      role={notif.read ? "listitem" : "button"}
+      tabIndex={notif.read ? -1 : 0}
+      onClick={() => !notif.read && onRead(notif.id)}
+      onKeyDown={(e) => e.key === "Enter" && !notif.read && onRead(notif.id)}
+      style={{
+        display: "flex", alignItems: "flex-start", gap: 14,
+        padding: "14px 18px", borderRadius: 12,
+        background: notif.read
+          ? C.surface
+          : isLowBal
+          ? "rgba(230,57,70,0.07)"
+          : "rgba(212,175,55,0.05)",
+        border: `1px solid ${notif.read ? C.border : isLowBal ? C.red + "33" : C.gold + "33"}`,
+        opacity: notif.read ? 0.55 : 1,
+        cursor: notif.read ? "default" : "pointer",
+        userSelect: "none",
+        animationDelay: `${delay * 0.05}s`,
+      }}>
+
+      {/* Icon */}
+      <div style={{
+        width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+        background: cfg.bg, border: `1px solid ${cfg.color}33`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <Ic d={cfg.icon} s={17} c={cfg.color} />
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <span style={{
+            fontFamily: "DM Sans, sans-serif", fontSize: 10, fontWeight: 700,
+            textTransform: "uppercase", letterSpacing: "0.7px",
+            color: notif.read ? C.textMuted : cfg.color,
+          }}>{cfg.label}</span>
+          <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+            {timeAgo(notif.createdAt)}
+          </span>
+        </div>
+        <p style={{
+          fontFamily: "DM Sans, sans-serif", fontSize: 13.5, lineHeight: 1.52,
+          color: notif.read ? C.textSec : C.text, margin: 0,
+        }}>{notif.message}</p>
+        {notif.meta && (
+          <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: C.textMuted, margin: "4px 0 0" }}>
+            {notif.meta}
+          </p>
+        )}
+        {isLowBal && !notif.read && (
+          <a href="/admin/wallet" style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            marginTop: 9, padding: "4px 10px", borderRadius: 6,
+            background: C.redMuted, border: `1px solid ${C.red}30`,
+            fontFamily: "DM Sans, sans-serif", fontSize: 11, fontWeight: 700,
+            color: C.red, textDecoration: "none",
+          }}>
+            <Ic d={D.wallet} s={11} c={C.red} /> Recharge wallet →
+          </a>
+        )}
+      </div>
+
+      {/* Unread dot */}
+      {!notif.read && (
+        <span style={{
+          width: 8, height: 8, borderRadius: "50%",
+          background: isLowBal ? C.red : C.gold,
+          flexShrink: 0, marginTop: 5,
+        }} />
+      )}
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORT
+// ═══════════════════════════════════════════════════════════════════════════════
 export const NotificationsCenter = () => {
   const { currentUser } = useAuth();
-  const [notifications, setNotifications] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [activeCategory, setActiveCategory] = useState("all");
+  const [notifs,     setNotifs]     = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [activeTab,  setActiveTab]  = useState("all");
   const [markingAll, setMarkingAll] = useState(false);
+  const [toast, showToast]          = useToast();
 
-  // ── Real-time listener ───────────────────────────────────────────────────
+  // Real-time listener — scoped to currentUser.uid
   useEffect(() => {
     if (!currentUser?.uid) return;
-
     const q = query(
-      collection(db, "notifications"),
+      collection(db, COLLECTIONS.NOTIFICATIONS),
       where("userId", "==", currentUser.uid),
       orderBy("createdAt", "desc")
     );
-
-    const unsub = onSnapshot(q, (snap) => {
-      setNotifications(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    });
-
+    const unsub = onSnapshot(q,
+      (snap) => { setNotifs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      ()      => setLoading(false)
+    );
     return () => unsub();
   }, [currentUser?.uid]);
 
-  // ── Mark single as read ──────────────────────────────────────────────────
-  const markRead = async (notifId) => {
-    await updateDoc(doc(db, "notifications", notifId), { read: true });
+  const markRead = async (id) => {
+    try {
+      await updateDoc(doc(db, COLLECTIONS.NOTIFICATIONS, id), { read: true });
+    } catch {
+      showToast("Could not mark as read", "error");
+    }
   };
 
-  // ── Mark all as read ─────────────────────────────────────────────────────
   const markAllRead = async () => {
     const unread = filtered.filter((n) => !n.read);
     if (!unread.length) return;
     setMarkingAll(true);
     try {
       const batch = writeBatch(db);
-      unread.forEach((n) => batch.update(doc(db, "notifications", n.id), { read: true }));
+      unread.forEach((n) =>
+        batch.update(doc(db, COLLECTIONS.NOTIFICATIONS, n.id), { read: true })
+      );
       await batch.commit();
+      showToast(`Marked ${unread.length} as read`);
+    } catch {
+      showToast("Failed to mark all as read", "error");
     } finally {
       setMarkingAll(false);
     }
   };
 
-  // ── Filtered list ────────────────────────────────────────────────────────
-  const filtered =
-    activeCategory === "all"
-      ? notifications
-      : notifications.filter((n) => n.type === activeCategory);
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
-  const filteredUnread = filtered.filter((n) => !n.read).length;
+  const filtered       = activeTab === "all" ? notifs : notifs.filter((n) => n.type === activeTab);
+  const totalUnread    = notifs.filter((n) => !n.read).length;
+  const filtUnread     = filtered.filter((n) => !n.read).length;
+  const hasLowBal      = notifs.some((n) => n.type === "low_balance" && !n.read);
+  const tabCount = (k) => k === "all" ? totalUnread : notifs.filter((n) => n.type === k && !n.read).length;
+  const unreadRows     = filtered.filter((n) => !n.read);
+  const readRows       = filtered.filter((n) => n.read);
 
   return (
-    <div style={styles.page}>
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <div style={styles.headerIconWrap}>
-            <Icon d={ICONS.bell} size={20} color="#F2A65A" />
-          </div>
-          <div>
-            <h1 style={styles.title}>Notifications</h1>
-            <p style={styles.subtitle}>
-              {unreadCount > 0
-                ? `${unreadCount} unread notification${unreadCount !== 1 ? "s" : ""}`
-                : "You're all caught up"}
-            </p>
-          </div>
+    <div style={{
+      minHeight: "100vh", background: C.bg,
+      fontFamily: "DM Sans, sans-serif",
+      padding: "28px 20px 64px",
+      maxWidth: 760, margin: "0 auto",
+    }}>
+
+      {/* Header */}
+      <div className="nc-header" style={{
+        display: "flex", alignItems: "flex-start",
+        justifyContent: "space-between", gap: 14, marginBottom: 22,
+      }}>
+        <div>
+          <h1 style={{
+            fontFamily: "Playfair Display, serif", fontWeight: 700,
+            fontSize: 22, color: C.text, margin: 0, letterSpacing: "-.3px",
+          }}>Notifications</h1>
+          <p style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, color: C.textSec, margin: "4px 0 0" }}>
+            {loading ? "Loading…" : totalUnread > 0
+              ? `${totalUnread} unread notification${totalUnread !== 1 ? "s" : ""}`
+              : "You're all caught up"}
+          </p>
         </div>
 
-        {unreadCount > 0 && (
-          <button
-            style={{ ...styles.markAllBtn, ...(markingAll ? styles.markAllBtnDisabled : {}) }}
-            onClick={markAllRead}
+        {filtUnread > 0 && (
+          <button className="nc-mark"
             disabled={markingAll}
-          >
-            <Icon d={ICONS.checkAll} size={15} />
+            onClick={markAllRead}
+            style={{
+              display: "flex", alignItems: "center", gap: 7,
+              padding: "9px 16px", minHeight: 44, borderRadius: 8,
+              border: `1px solid ${C.border}`, background: "transparent",
+              color: C.textSec, fontFamily: "DM Sans, sans-serif",
+              fontSize: 12, fontWeight: 600,
+              cursor: markingAll ? "not-allowed" : "pointer",
+              opacity: markingAll ? 0.5 : 1, whiteSpace: "nowrap",
+            }}>
+            <Ic d={D.checkAll} s={14} c="currentColor" />
             {markingAll ? "Marking…" : "Mark all read"}
           </button>
         )}
       </div>
 
-      {/* ── Category Tabs ───────────────────────────────────────────────── */}
-      <div style={styles.tabs}>
-        {Object.entries(CATEGORIES).map(([key, cat]) => {
-          const count =
-            key === "all"
-              ? unreadCount
-              : notifications.filter((n) => n.type === key && !n.read).length;
-          const isActive = activeCategory === key;
+      {/* Low-balance banner */}
+      {hasLowBal && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "12px 16px", borderRadius: 10, marginBottom: 20,
+          background: C.redMuted, border: `1px solid ${C.red}44`,
+        }}>
+          <Ic d={D.alert} s={16} c={C.red} />
+          <span style={{ fontFamily: "DM Sans, sans-serif", fontSize: 13, fontWeight: 600, color: C.red, flex: 1 }}>
+            Wallet balance is low — calling will stop when balance drops below ₹5.
+          </span>
+          <a href="/admin/wallet" style={{
+            fontFamily: "DM Sans, sans-serif", fontSize: 12, fontWeight: 700,
+            color: "#000", background: C.red, padding: "6px 14px",
+            borderRadius: 7, textDecoration: "none", minHeight: 32,
+            display: "flex", alignItems: "center", whiteSpace: "nowrap",
+          }}>Recharge now</a>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="nc-tabs" style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+        {TABS.map((tab) => {
+          const active = activeTab === tab.key;
+          const count  = tabCount(tab.key);
           return (
-            <button
-              key={key}
+            <button key={tab.key} className="nc-tab"
+              onClick={() => setActiveTab(tab.key)}
               style={{
-                ...styles.tab,
-                ...(isActive ? styles.tabActive : styles.tabInactive),
-              }}
-              onClick={() => setActiveCategory(key)}
-            >
-              <Icon
-                d={cat.icon}
-                size={14}
-                color={isActive ? "#F2A65A" : "#AAAAAA"}
-              />
-              <span>{cat.label}</span>
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "7px 14px", minHeight: 36, borderRadius: 8,
+                border: `1px solid ${active ? C.gold + "55" : C.border}`,
+                background: active ? C.goldMuted : C.surface,
+                color: active ? C.gold : C.textSec,
+                fontFamily: "DM Sans, sans-serif", fontSize: 12, fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}>
+              <Ic d={tab.icon} s={13} c={active ? C.gold : C.textSec} />
+              {tab.label}
               {count > 0 && (
-                <span
-                  style={{
-                    ...styles.tabBadge,
-                    background: isActive ? "#B65E3C" : "#2A2420",
-                  }}
-                >
-                  {count}
-                </span>
+                <span style={{
+                  minWidth: 18, height: 18, borderRadius: 9, padding: "0 5px",
+                  background: active ? C.gold : C.border,
+                  color: active ? "#000" : C.textSec,
+                  fontFamily: "DM Sans, sans-serif", fontSize: 10, fontWeight: 700,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>{count}</span>
               )}
             </button>
           );
         })}
       </div>
 
-      {/* ── Content ─────────────────────────────────────────────────────── */}
-      <div style={styles.content}>
-        {loading ? (
-          <LoadingSkeleton />
-        ) : filtered.length === 0 ? (
-          <EmptyState category={activeCategory} />
-        ) : (
-          <div style={styles.list}>
-            {/* Unread section */}
-            {filteredUnread > 0 && (
-              <>
-                <div style={styles.sectionLabel}>
-                  <span style={styles.sectionDot} />
-                  Unread
-                </div>
-                {filtered
-                  .filter((n) => !n.read)
-                  .map((n) => (
-                    <NotifCard key={n.id} notif={n} onRead={markRead} />
-                  ))}
-              </>
-            )}
-
-            {/* Read section */}
-            {filtered.some((n) => n.read) && (
-              <>
-                <div style={{ ...styles.sectionLabel, marginTop: 24 }}>
-                  <span style={{ ...styles.sectionDot, background: "#444" }} />
-                  Earlier
-                </div>
-                {filtered
-                  .filter((n) => n.read)
-                  .map((n) => (
-                    <NotifCard key={n.id} notif={n} onRead={markRead} />
-                  ))}
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ── NotifCard ────────────────────────────────────────────────────────────────
-const NotifCard = ({ notif, onRead }) => {
-  const [hovered, setHovered] = useState(false);
-  const color = categoryColor(notif.type);
-  const icon  = categoryIcon(notif.type);
-
-  return (
-    <div
-      style={{
-        ...styles.card,
-        background: notif.read
-          ? "#1A1A1A"
-          : hovered
-          ? "#201A16"
-          : "#1C1510",
-        borderLeft: `3px solid ${notif.read ? "#2A2A2A" : color}`,
-        cursor: notif.read ? "default" : "pointer",
-        opacity: notif.read ? 0.65 : 1,
-        transform: hovered && !notif.read ? "translateX(3px)" : "none",
-        transition: "all 0.18s ease",
-      }}
-      onClick={() => !notif.read && onRead(notif.id)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      {/* Icon bubble */}
-      <div
-        style={{
-          ...styles.cardIcon,
-          background: `${color}1A`,
-          border: `1px solid ${color}33`,
-        }}
-      >
-        <Icon d={icon} size={16} color={color} />
-      </div>
-
       {/* Body */}
-      <div style={styles.cardBody}>
-        <div style={styles.cardTopRow}>
-          <span
-            style={{
-              ...styles.cardCategory,
-              color: notif.read ? "#666" : color,
-            }}
-          >
-            {CATEGORIES[notif.type]?.label ?? "Notification"}
-          </span>
-          <span style={styles.cardTime}>{timeAgo(notif.createdAt)}</span>
+      {loading ? (
+        <Skeleton />
+      ) : filtered.length === 0 ? (
+        <EmptyState tab={activeTab} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {unreadRows.length > 0 && (
+            <>
+              <SectionLabel label="Unread" dot={C.gold} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: readRows.length ? 24 : 0 }}>
+                {unreadRows.map((n, i) => <NotifRow key={n.id} notif={n} onRead={markRead} delay={i} />)}
+              </div>
+            </>
+          )}
+          {readRows.length > 0 && (
+            <>
+              <SectionLabel label="Earlier" dot={C.border} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {readRows.map((n, i) => <NotifRow key={n.id} notif={n} onRead={markRead} delay={i} />)}
+              </div>
+            </>
+          )}
         </div>
-        <p
-          style={{
-            ...styles.cardMessage,
-            color: notif.read ? "#888" : "#F5F5F5",
-          }}
-        >
-          {notif.message}
-        </p>
-        {notif.meta && (
-          <p style={styles.cardMeta}>{notif.meta}</p>
-        )}
-      </div>
-
-      {/* Unread dot */}
-      {!notif.read && (
-        <div style={{ ...styles.unreadDot, background: color }} />
       )}
+
+      <Toast t={toast} />
     </div>
   );
-};
-
-// ── Empty State ──────────────────────────────────────────────────────────────
-const EmptyState = ({ category }) => (
-  <div style={styles.empty}>
-    <div style={styles.emptyIconRing}>
-      <Icon
-        d={CATEGORIES[category]?.icon ?? ICONS.inbox}
-        size={32}
-        color="#B65E3C"
-      />
-    </div>
-    <p style={styles.emptyTitle}>No notifications</p>
-    <p style={styles.emptyText}>
-      {category === "all"
-        ? "You're all caught up. New alerts will appear here."
-        : `No ${CATEGORIES[category]?.label.toLowerCase()} notifications yet.`}
-    </p>
-  </div>
-);
-
-// ── Loading Skeleton ─────────────────────────────────────────────────────────
-const LoadingSkeleton = () => (
-  <div style={styles.list}>
-    {[...Array(5)].map((_, i) => (
-      <div key={i} style={{ ...styles.card, background: "#1A1A1A", borderLeft: "3px solid #2A2A2A" }}>
-        <div style={{ ...styles.cardIcon, background: "#222", border: "1px solid #2A2A2A" }} />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ height: 10, width: "30%", background: "#252525", borderRadius: 4 }} />
-          <div style={{ height: 13, width: "80%", background: "#222", borderRadius: 4 }} />
-          <div style={{ height: 11, width: "55%", background: "#1E1E1E", borderRadius: 4 }} />
-        </div>
-      </div>
-    ))}
-  </div>
-);
-
-// ── Styles ───────────────────────────────────────────────────────────────────
-const styles = {
-  page: {
-    minHeight: "100vh",
-    background: "#121212",
-    color: "#F5F5F5",
-    fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
-    padding: "32px 24px",
-    maxWidth: 760,
-    margin: "0 auto",
-  },
-  header: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    marginBottom: 28,
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  headerLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: 14,
-  },
-  headerIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    background: "#1E1510",
-    border: "1px solid #B65E3C33",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  title: {
-    margin: 0,
-    fontSize: 22,
-    fontWeight: 700,
-    letterSpacing: "-0.3px",
-    color: "#F5F5F5",
-  },
-  subtitle: {
-    margin: "3px 0 0",
-    fontSize: 13,
-    color: "#AAAAAA",
-  },
-  markAllBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 7,
-    padding: "8px 16px",
-    borderRadius: 8,
-    border: "1px solid #B65E3C44",
-    background: "#1A1008",
-    color: "#F2A65A",
-    fontSize: 13,
-    fontWeight: 500,
-    cursor: "pointer",
-    transition: "all 0.15s",
-    whiteSpace: "nowrap",
-  },
-  markAllBtnDisabled: {
-    opacity: 0.5,
-    cursor: "not-allowed",
-  },
-  tabs: {
-    display: "flex",
-    gap: 6,
-    marginBottom: 24,
-    overflowX: "auto",
-    paddingBottom: 4,
-    scrollbarWidth: "none",
-  },
-  tab: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "7px 14px",
-    borderRadius: 8,
-    border: "1px solid transparent",
-    fontSize: 13,
-    fontWeight: 500,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-    transition: "all 0.15s",
-    flexShrink: 0,
-  },
-  tabActive: {
-    background: "#1E1510",
-    border: "1px solid #B65E3C55",
-    color: "#F2A65A",
-  },
-  tabInactive: {
-    background: "#1A1A1A",
-    color: "#AAAAAA",
-  },
-  tabBadge: {
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 11,
-    fontWeight: 700,
-    color: "#F5F5F5",
-    padding: "0 5px",
-  },
-  content: {
-    marginTop: 4,
-  },
-  list: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-  },
-  sectionLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontSize: 11,
-    fontWeight: 600,
-    color: "#888",
-    textTransform: "uppercase",
-    letterSpacing: "0.8px",
-    marginBottom: 8,
-  },
-  sectionDot: {
-    width: 7,
-    height: 7,
-    borderRadius: "50%",
-    background: "#F2A65A",
-    flexShrink: 0,
-  },
-  card: {
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 14,
-    padding: "14px 16px",
-    borderRadius: 10,
-    position: "relative",
-    userSelect: "none",
-  },
-  cardIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  cardBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  cardTopRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 4,
-    gap: 8,
-  },
-  cardCategory: {
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.6px",
-  },
-  cardTime: {
-    fontSize: 11,
-    color: "#666",
-    flexShrink: 0,
-  },
-  cardMessage: {
-    margin: 0,
-    fontSize: 14,
-    lineHeight: 1.5,
-  },
-  cardMeta: {
-    margin: "5px 0 0",
-    fontSize: 12,
-    color: "#888",
-  },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    flexShrink: 0,
-    marginTop: 6,
-  },
-  empty: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "80px 24px",
-    textAlign: "center",
-    gap: 14,
-  },
-  emptyIconRing: {
-    width: 72,
-    height: 72,
-    borderRadius: "50%",
-    background: "#1E1510",
-    border: "1px solid #B65E3C33",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
-  emptyTitle: {
-    margin: 0,
-    fontSize: 17,
-    fontWeight: 600,
-    color: "#F5F5F5",
-  },
-  emptyText: {
-    margin: 0,
-    fontSize: 14,
-    color: "#888",
-    maxWidth: 300,
-    lineHeight: 1.6,
-  },
 };
 
 export default NotificationsCenter;

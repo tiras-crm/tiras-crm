@@ -1,1069 +1,298 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// TIRAS CRM — MyFollowUps
-// File: src/pages/MyFollowUps.jsx
-//
-// HOW TO USE:
-//   In src/pages/index.js replace:
-//     export const MyFollowUps = () => <Placeholder name="My Follow-ups" />;
-//   with the full contents of this file.
-//
-// ROUTE: /agent/followups
-//
-// FIRESTORE:
-//   Real-time onSnapshot on followups
-//   where agentId == currentUser.uid AND companyId == companyId
-//   orderBy scheduledAt asc
-//   Writes: updateDoc to mark done / reschedule
-// ─────────────────────────────────────────────────────────────────────────────
-
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  orderBy,
-  updateDoc,
-  doc,
-  serverTimestamp,
-} from "firebase/firestore";
-import { db, COLLECTIONS } from "../firebase";
-import { useAuth } from "../contexts/AuthContext";
-import {
-  COLORS,
-  FONTS,
-  SPACING,
-  RADIUS,
-  SHADOWS,
-  TRANSITIONS,
-} from "../theme";
-
-// ─── Keyframe injection ───────────────────────────────────────────────────────
-
-const STYLE_ID = "tiras-followups-styles";
-const injectStyles = () => {
-  if (document.getElementById(STYLE_ID)) return;
-  const tag = document.createElement("style");
-  tag.id = STYLE_ID;
-  tag.textContent = `
-    @keyframes tiras-fade-up   { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
-    @keyframes tiras-spin      { to{transform:rotate(360deg)} }
-    @keyframes tiras-row-in    { from{opacity:0;transform:translateX(-6px)} to{opacity:1;transform:translateX(0)} }
-    @keyframes tiras-done-out  { from{opacity:1;max-height:120px;margin-bottom:0} to{opacity:0;max-height:0;margin-bottom:-1px} }
-    @keyframes tiras-pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
-    @keyframes tiras-modal-bg  { from{opacity:0} to{opacity:1} }
-    @keyframes tiras-modal-pop { from{opacity:0;transform:scale(0.94) translateY(8px)} to{opacity:1;transform:scale(1) translateY(0)} }
-    @keyframes tiras-toast-in  { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+// TIRAS CRM V2 — MyFollowUps | Anuradha | Obsidian Gold
+// src/pages/MyFollowUps.jsx
+import React,{useState,useEffect,useMemo,useRef}from"react";
+import{useNavigate}from"react-router-dom";
+import{collection,query,where,onSnapshot,orderBy,updateDoc,doc,serverTimestamp,Timestamp}from"firebase/firestore";
+import{db,COLLECTIONS}from"../firebase";
+import{useAuth}from"../contexts/AuthContext";
+const T={bg:"#121212",surface:"#1A1A1B",gold:"#D4AF37",accent:"#E63946",text:"#F5F5F5",sub:"#9A9A9A",border:"#2A2A2B",success:"#22C55E",warning:"#F59E0B",info:"#3B82F6",goldBg:"rgba(212,175,55,.10)",goldBorder:"rgba(212,175,55,.30)",dangerBg:"rgba(230,57,70,.10)",dangerBorder:"rgba(230,57,70,.30)",successBg:"rgba(34,197,94,.10)",warningBg:"rgba(245,158,11,.10)"};
+const STYLE_ID="tiras-v2-fu";
+const injectStyles=()=>{
+  if(document.getElementById(STYLE_ID))return;
+  const t=document.createElement("style");t.id=STYLE_ID;
+  t.textContent=`
+    @keyframes v2fu  {from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes v2spin{to{transform:rotate(360deg)}}
+    @keyframes v2shim{0%{background-position:-500px 0}100%{background-position:500px 0}}
+    @keyframes v2row {from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
+    @keyframes v2dout{from{opacity:1;max-height:120px}to{opacity:0;max-height:0;padding:0;margin:0;border:none}}
+    @keyframes v2pls {0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes v2mbin{from{opacity:0}to{opacity:1}}
+    @keyframes v2mpop{from{opacity:0;transform:scale(.94) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    @keyframes v2tin {from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:translateX(0)}}
+    .v2pbtn:hover{background:#e4c350!important;box-shadow:0 6px 20px rgba(212,175,55,.4)!important;transform:translateY(-1px)}
+    .v2sbtn:hover{border-color:rgba(212,175,55,.5)!important;color:#D4AF37!important}
+    .v2card:hover{border-color:rgba(212,175,55,.35)!important;transform:translateY(-1px);transition:all .2s ease!important}
+    .v2abtn:hover{border-color:rgba(212,175,55,.45)!important;color:#D4AF37!important}
+    .v2shim{background:linear-gradient(90deg,#1A1A1B 25%,rgba(255,255,255,.05) 50%,#1A1A1B 75%);background-size:500px 100%;animation:v2shim 1.4s ease infinite;border-radius:8px}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#121212}::-webkit-scrollbar-thumb{background:#2A2A2B;border-radius:4px}
+    @media(max-width:640px){.v2pad{padding:16px!important}.v2stats{grid-template-columns:repeat(2,1fr)!important}.v2fu-actions{gap:6px!important}.v2fu-actions span{display:none!important}}
   `;
-  document.head.appendChild(tag);
+  document.head.appendChild(t);
+};
+const todayStart=()=>{const d=new Date();d.setHours(0,0,0,0);return d;};
+const todayEnd=()=>{const d=new Date();d.setHours(23,59,59,999);return d;};
+const fmtTime=ts=>{if(!ts)return"";const d=ts.toDate?ts.toDate():new Date(ts);return d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});};
+const fmtDate=ts=>{if(!ts)return"";const d=ts.toDate?ts.toDate():new Date(ts);return d.toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"});};
+const fmtFull=ts=>{if(!ts)return"";const d=ts.toDate?ts.toDate():new Date(ts);return d.toLocaleString("en-IN",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});};
+const isoDate=ts=>{if(!ts)return"";const d=ts.toDate?ts.toDate():new Date(ts);return d.toISOString().slice(0,10);};
+const isoTime=ts=>{if(!ts)return"";const d=ts.toDate?ts.toDate():new Date(ts);return d.toTimeString().slice(0,5);};
+const bucket=fu=>{
+  const d=fu.scheduledAt?.toDate?.();
+  if(!d)return"upcoming";
+  if(fu.status==="done")return"done";
+  if(d<todayStart())return"overdue";
+  if(d<=todayEnd())return"today";
+  return"upcoming";
+};
+const dateLabel=isoKey=>{
+  if(isoKey==="unknown")return"Unscheduled";
+  const d=new Date(isoKey+"T00:00:00");
+  const td=new Date();td.setHours(0,0,0,0);
+  const tm=new Date();tm.setDate(tm.getDate()+1);tm.setHours(0,0,0,0);
+  if(d.getTime()===td.getTime())return"Today";
+  if(d.getTime()===tm.getTime())return"Tomorrow";
+  if(d<td)return`Overdue — ${d.toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"})}`;
+  return d.toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"});
+};
+const Shim=({h,w="100%"})=><div className="v2shim" style={{height:h,width:w}}/>;
+const CheckIco=()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+const ClkIco=()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+const PhIco=()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.39 2 2 0 0 1 3.6 1.21h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.85a16 16 0 0 0 6.29 6.29l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>;
+const EyIco=()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+
+const ABtn=({ico,label,color,onClick})=>{
+  const[h,setH]=useState(false);
+  return(
+    <button className="v2abtn" onClick={onClick}
+      onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+      style={{background:"none",border:`1px solid ${T.border}`,borderRadius:"7px",color:h?color:T.sub,cursor:"pointer",padding:"6px 10px",display:"flex",alignItems:"center",gap:"5px",fontFamily:"'DM Sans',sans-serif",fontSize:"12px",fontWeight:600,transition:"all .15s",minHeight:"36px",whiteSpace:"nowrap"}}>
+      {ico}<span>{label}</span>
+    </button>
+  );
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const todayMidnight = () => {
-  const d = new Date(); d.setHours(0, 0, 0, 0); return d;
-};
-const tomorrowMidnight = () => {
-  const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0); return d;
-};
-const endOfToday = () => {
-  const d = new Date(); d.setHours(23, 59, 59, 999); return d;
-};
-
-const fmtTime = (ts) => {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-};
-
-const fmtDate = (ts) => {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
-};
-
-const fmtFull = (ts) => {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-};
-
-const isoDate = (ts) => {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toISOString().slice(0, 10);
-};
-
-const isoTime = (ts) => {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toTimeString().slice(0, 5);
-};
-
-// Group followups into buckets
-const bucket = (fu) => {
-  const d = fu.scheduledAt?.toDate?.();
-  if (!d) return "upcoming";
-  if (fu.status === "done")     return "done";
-  if (d < todayMidnight())      return "overdue";
-  if (d <= endOfToday())        return "today";
-  if (d < tomorrowMidnight())   return "today"; // edge
-  return "upcoming";
-};
-
-// ─── Style objects ────────────────────────────────────────────────────────────
-
-const S = {
-  page: {
-    minHeight: "100%",
-    backgroundColor: COLORS.background,
-    fontFamily: FONTS.family,
-    padding: SPACING["2xl"],
-  },
-
-  // Header
-  pageHeader: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    marginBottom: SPACING["2xl"],
-    flexWrap: "wrap",
-    gap: SPACING.base,
-    animation: "tiras-fade-up 0.3s ease both",
-  },
-  pageTitle: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size["3xl"],
-    fontWeight: FONTS.weight.bold,
-    letterSpacing: "-0.01em",
-    marginBottom: "3px",
-  },
-  pageSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: FONTS.size.base,
-  },
-
-  // Filter bar
-  filterBar: {
-    display: "flex",
-    gap: SPACING.sm,
-    marginBottom: SPACING["2xl"],
-    flexWrap: "wrap",
-    animation: "tiras-fade-up 0.3s ease 50ms both",
-  },
-  filterTab: {
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.full,
-    fontFamily: FONTS.family,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.medium,
-    padding: `${SPACING.xs} ${SPACING.lg}`,
-    cursor: "pointer",
-    transition: TRANSITIONS.fast,
-    display: "flex",
-    alignItems: "center",
-    gap: SPACING.xs,
-    backgroundColor: "transparent",
-  },
-  filterTabActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-    color: "#121212",
-    fontWeight: FONTS.weight.bold,
-    boxShadow: SHADOWS.primary,
-  },
-  filterTabCount: {
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.bold,
-    padding: "0px 5px",
-    borderRadius: RADIUS.full,
-    lineHeight: "1.6",
-  },
-
-  // Stats row
-  statsRow: {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
-    gap: SPACING.base,
-    marginBottom: SPACING["2xl"],
-    animation: "tiras-fade-up 0.3s ease 80ms both",
-  },
-  statCard: {
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.xl,
-    position: "relative",
-    overflow: "hidden",
-  },
-  statAccent: {
-    position: "absolute",
-    top: 0, left: 0, right: 0,
-    height: "2px",
-  },
-  statLabel: {
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.xs,
-    textTransform: "uppercase",
-    letterSpacing: "0.07em",
-    fontWeight: FONTS.weight.semibold,
-    marginBottom: SPACING.xs,
-  },
-  statValue: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size["3xl"],
-    fontWeight: FONTS.weight.bold,
-    lineHeight: 1,
-  },
-
-  // Section heading
-  sectionHeading: {
-    display: "flex",
-    alignItems: "center",
-    gap: SPACING.sm,
-    marginBottom: SPACING.base,
-    marginTop: SPACING.xl,
-  },
-  sectionTitle: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.md,
-    fontWeight: FONTS.weight.bold,
-  },
-  sectionCount: {
-    backgroundColor: COLORS.surfaceActive,
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.semibold,
-    padding: "1px 7px",
-    borderRadius: RADIUS.full,
-    lineHeight: "1.7",
-  },
-
-  // Follow-up card
-  fuCard: {
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.lg,
-    overflow: "hidden",
-    marginBottom: SPACING.sm,
-    transition: TRANSITIONS.base,
-    animation: "tiras-row-in 0.2s ease both",
-    boxShadow: SHADOWS.sm,
-  },
-  fuCardHover: {
-    borderColor: `${COLORS.primary}40`,
-    boxShadow: `0 4px 16px ${COLORS.primary}10`,
-  },
-  fuCardOverdue: {
-    borderColor: `${COLORS.danger}35`,
-    backgroundColor: `${COLORS.danger}04`,
-  },
-  fuCardDone: {
-    opacity: 0.5,
-  },
-
-  fuRow: {
-    display: "flex",
-    alignItems: "center",
-    padding: `${SPACING.md} ${SPACING.xl}`,
-    gap: SPACING.md,
-  },
-
-  // Left: colour indicator
-  fuIndicator: {
-    width: "3px",
-    alignSelf: "stretch",
-    borderRadius: RADIUS.full,
-    flexShrink: 0,
-    minHeight: "48px",
-  },
-
-  // Time column
-  fuTimeCol: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: "1px",
-    minWidth: "56px",
-    flexShrink: 0,
-  },
-  fuTimeMain: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.base,
-    fontWeight: FONTS.weight.bold,
-    fontFamily: FONTS.mono,
-    lineHeight: 1.2,
-  },
-  fuTimeDate: {
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.xs,
-    lineHeight: 1.2,
-    whiteSpace: "nowrap",
-  },
-
-  // Body
-  fuBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  fuLeadName: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.base,
-    fontWeight: FONTS.weight.semibold,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    marginBottom: "2px",
-  },
-  fuNote: {
-    color: COLORS.textSecondary,
-    fontSize: FONTS.size.sm,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-
-  // Tags
-  fuTagRow: {
-    display: "flex",
-    gap: SPACING.xs,
-    marginTop: "4px",
-    flexWrap: "wrap",
-  },
-  fuTag: {
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.semibold,
-    padding: "1px 7px",
-    borderRadius: RADIUS.full,
-  },
-
-  // Actions column
-  fuActions: {
-    display: "flex",
-    gap: SPACING.xs,
-    flexShrink: 0,
-  },
-  actionBtn: {
-    background: "none",
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.base,
-    cursor: "pointer",
-    padding: "6px 10px",
-    display: "flex",
-    alignItems: "center",
-    gap: "5px",
-    fontFamily: FONTS.family,
-    fontSize: FONTS.size.xs,
-    fontWeight: FONTS.weight.semibold,
-    color: COLORS.textSecondary,
-    transition: TRANSITIONS.fast,
-    whiteSpace: "nowrap",
-  },
-
-  // Empty state
-  emptyState: {
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.lg,
-    padding: `${SPACING["3xl"]} ${SPACING.xl}`,
-    textAlign: "center",
-    color: COLORS.textMuted,
-  },
-  emptyIcon: { fontSize: "36px", marginBottom: SPACING.md, opacity: 0.4 },
-  emptyTitle: {
-    color: COLORS.textSecondary,
-    fontSize: FONTS.size.lg,
-    fontWeight: FONTS.weight.semibold,
-    marginBottom: SPACING.xs,
-  },
-
-  // Loading
-  loadingWrap: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: `${SPACING["5xl"]} ${SPACING.xl}`,
-    gap: SPACING.sm,
-    color: COLORS.textMuted,
-    fontSize: FONTS.size.sm,
-  },
-  spinner: {
-    width: "18px",
-    height: "18px",
-    borderRadius: "50%",
-    border: `2px solid ${COLORS.border}`,
-    borderTopColor: COLORS.primary,
-    animation: "tiras-spin 0.7s linear infinite",
-    flexShrink: 0,
-  },
-
-  // Reschedule modal
-  modalOverlay: {
-    position: "fixed",
-    inset: 0,
-    backgroundColor: "rgba(0,0,0,0.72)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-    padding: SPACING.base,
-    animation: "tiras-modal-bg 0.2s ease both",
-  },
-  modal: {
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.xl,
-    boxShadow: SHADOWS.lg,
-    width: "100%",
-    maxWidth: "420px",
-    animation: "tiras-modal-pop 0.25s ease both",
-    overflow: "hidden",
-  },
-  modalHeader: {
-    padding: `${SPACING.xl} ${SPACING["2xl"]} ${SPACING.base}`,
-    borderBottom: `1px solid ${COLORS.border}`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  modalTitle: {
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.lg,
-    fontWeight: FONTS.weight.bold,
-  },
-  modalCloseBtn: {
-    background: "none",
-    border: "none",
-    color: COLORS.textMuted,
-    cursor: "pointer",
-    fontSize: "20px",
-    lineHeight: 1,
-    padding: "2px",
-  },
-  modalBody: { padding: SPACING["2xl"] },
-  modalFooter: {
-    padding: `${SPACING.base} ${SPACING["2xl"]} ${SPACING.xl}`,
-    display: "flex",
-    gap: SPACING.sm,
-    justifyContent: "flex-end",
-  },
-  modalLabel: {
-    color: COLORS.textSecondary,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.medium,
-    marginBottom: SPACING.xs,
-    display: "block",
-    letterSpacing: "0.02em",
-  },
-  modalInput: {
-    backgroundColor: COLORS.inputBg,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.md,
-    color: COLORS.textPrimary,
-    fontFamily: FONTS.family,
-    fontSize: FONTS.size.base,
-    padding: `${SPACING.sm} ${SPACING.md}`,
-    outline: "none",
-    width: "100%",
-    boxSizing: "border-box",
-    marginBottom: SPACING.base,
-  },
-  btnPrimary: {
-    backgroundColor: COLORS.primary,
-    color: "#121212",
-    border: "none",
-    borderRadius: RADIUS.md,
-    fontFamily: FONTS.family,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.semibold,
-    padding: `${SPACING.sm} ${SPACING.xl}`,
-    cursor: "pointer",
-    transition: TRANSITIONS.base,
-    boxShadow: SHADOWS.primary,
-  },
-  btnSecondary: {
-    backgroundColor: "transparent",
-    color: COLORS.textSecondary,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.md,
-    fontFamily: FONTS.family,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.medium,
-    padding: `${SPACING.sm} ${SPACING.xl}`,
-    cursor: "pointer",
-    transition: TRANSITIONS.base,
-  },
-
-  // Toast
-  toast: {
-    position: "fixed",
-    bottom: SPACING["2xl"],
-    right: SPACING["2xl"],
-    backgroundColor: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: RADIUS.lg,
-    padding: `${SPACING.md} ${SPACING.xl}`,
-    color: COLORS.textPrimary,
-    fontSize: FONTS.size.sm,
-    fontWeight: FONTS.weight.medium,
-    boxShadow: SHADOWS.lg,
-    zIndex: 2000,
-    display: "flex",
-    alignItems: "center",
-    gap: SPACING.sm,
-    animation: "tiras-toast-in 0.3s ease both",
-    maxWidth: "320px",
-  },
-};
-
-// ─── SVG icons ────────────────────────────────────────────────────────────────
-
-const CheckIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20 6 9 17 4 12"/>
-  </svg>
-);
-const ClockIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-  </svg>
-);
-const PhoneIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.39 2 2 0 0 1 3.6 1.21h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.85a16 16 0 0 0 6.29 6.29l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
-  </svg>
-);
-const EyeIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-  </svg>
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FollowUpCard — single follow-up row
-// ─────────────────────────────────────────────────────────────────────────────
-
-const FollowUpCard = ({ fu, onDone, onReschedule, onCallNow, onViewLead, animDelay }) => {
-  const [hovered, setHovered] = useState(false);
-  const [doneExiting, setDoneExiting] = useState(false);
-
-  const isOverdue = bucket(fu) === "overdue";
-  const isDone    = fu.status === "done";
-  const isToday   = bucket(fu) === "today";
-
-  const indicatorColor = isDone    ? COLORS.success
-                       : isOverdue ? COLORS.danger
-                       : isToday   ? COLORS.accent
-                       : COLORS.primary;
-
-  const handleDone = () => {
-    setDoneExiting(true);
-    setTimeout(() => onDone(fu.id), 320);
-  };
-
-  return (
-    <div
-      style={{
-        ...S.fuCard,
-        ...(hovered && !isDone ? S.fuCardHover : {}),
-        ...(isOverdue ? S.fuCardOverdue : {}),
-        ...(isDone    ? S.fuCardDone    : {}),
-        animationDelay: `${animDelay}ms`,
-        ...(doneExiting ? { animation: "tiras-done-out 0.32s ease forwards", overflow: "hidden" } : {}),
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div style={S.fuRow}>
-        {/* Coloured left bar */}
-        <div style={{ ...S.fuIndicator, backgroundColor: indicatorColor }} />
-
-        {/* Time */}
-        <div style={S.fuTimeCol}>
-          <div style={{ ...S.fuTimeMain, color: indicatorColor }}>
-            {fmtTime(fu.scheduledAt)}
+const FUCard=({fu,onDone,onReschedule,onCall,onView,delay})=>{
+  const[exiting,setExiting]=useState(false);
+  const bkt=bucket(fu);
+  const isOD=bkt==="overdue";
+  const isDone=fu.status==="done";
+  const isToday=bkt==="today";
+  const barC=isDone?T.success:isOD?T.accent:isToday?T.gold:T.info;
+  const doDone=()=>{setExiting(true);setTimeout(()=>onDone(fu.id),300);};
+  return(
+    <div className={exiting?"":"v2card"}
+      style={{backgroundColor:T.surface,border:`1px solid ${isOD&&!isDone?`rgba(230,57,70,.35)`:T.border}`,borderRadius:"12px",overflow:"hidden",marginBottom:"10px",transition:"all .2s ease",animation:`v2row .2s ease ${delay}ms both`,opacity:isDone?.5:1,...(exiting?{animation:"v2dout .3s ease forwards",overflow:"hidden"}:{})}}>
+      <div style={{display:"flex",alignItems:"stretch"}}>
+        {/* Left colour bar */}
+        <div style={{width:"3px",backgroundColor:barC,flexShrink:0,borderRadius:"12px 0 0 12px"}}/>
+        <div style={{flex:1,padding:"14px 16px",display:"flex",alignItems:"center",gap:"14px"}}>
+          {/* Time col */}
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"1px",minWidth:"52px",flexShrink:0}}>
+            <div style={{fontSize:"14px",fontWeight:700,color:barC,fontFamily:"monospace",lineHeight:1.2}}>{fmtTime(fu.scheduledAt)}</div>
+            <div style={{fontSize:"11px",color:T.sub,lineHeight:1.2,whiteSpace:"nowrap"}}>{fmtDate(fu.scheduledAt)}</div>
           </div>
-          <div style={S.fuTimeDate}>
-            {fmtDate(fu.scheduledAt)}
+          {/* Content */}
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:"14px",fontWeight:600,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:"2px"}}>{fu.leadName??"—"}</div>
+            {fu.note&&<div style={{fontSize:"12px",color:T.sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:"4px"}}>{fu.note}</div>}
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {isOD&&!isDone&&<span style={{fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"20px",color:T.accent,backgroundColor:T.dangerBg}}>Overdue</span>}
+              {isDone&&<span style={{fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"20px",color:T.success,backgroundColor:T.successBg}}>✓ Done</span>}
+              {isToday&&!isDone&&<span style={{fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"20px",color:T.gold,backgroundColor:T.goldBg,display:"flex",alignItems:"center",gap:"4px"}}><span style={{width:"5px",height:"5px",borderRadius:"50%",backgroundColor:T.gold,animation:"v2pls 1.5s ease infinite",display:"inline-block"}}/>Today</span>}
+            </div>
           </div>
+          {/* Actions */}
+          {!isDone&&(
+            <div style={{display:"flex",gap:"6px",flexShrink:0,flexWrap:"wrap"}} className="v2fu-actions">
+              {fu.leadId&&<ABtn ico={<EyIco/>} label="View" color={T.info} onClick={()=>onView(fu.leadId)}/>}
+              {fu.leadId&&<ABtn ico={<PhIco/>} label="Call" color={T.success} onClick={()=>onCall(fu)}/>}
+              <ABtn ico={<ClkIco/>} label="Reschedule" color={T.warning} onClick={()=>onReschedule(fu)}/>
+              <ABtn ico={<CheckIco/>} label="Done" color={T.success} onClick={doDone}/>
+            </div>
+          )}
         </div>
-
-        {/* Content */}
-        <div style={S.fuBody}>
-          <div style={S.fuLeadName}>{fu.leadName ?? "—"}</div>
-          {fu.note && <div style={S.fuNote}>{fu.note}</div>}
-          <div style={S.fuTagRow}>
-            {isOverdue && (
-              <span style={{ ...S.fuTag, color: COLORS.danger, backgroundColor: `${COLORS.danger}18` }}>
-                Overdue
-              </span>
-            )}
-            {isDone && (
-              <span style={{ ...S.fuTag, color: COLORS.success, backgroundColor: `${COLORS.success}18` }}>
-                ✓ Done
-              </span>
-            )}
-            {isToday && !isDone && (
-              <span style={{
-                ...S.fuTag,
-                color: COLORS.accent,
-                backgroundColor: `${COLORS.accent}18`,
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-              }}>
-                <span style={{
-                  width: "5px",
-                  height: "5px",
-                  borderRadius: "50%",
-                  backgroundColor: COLORS.accent,
-                  animation: "tiras-pulse-dot 1.5s ease infinite",
-                  display: "inline-block",
-                }} />
-                Today
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Actions */}
-        {!isDone && (
-          <div style={S.fuActions}>
-            {/* View lead */}
-            {fu.leadId && (
-              <button
-                style={S.actionBtn}
-                title="View lead"
-                onClick={() => onViewLead(fu.leadId)}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${COLORS.info}60`; e.currentTarget.style.color = COLORS.info; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textSecondary; }}
-              >
-                <EyeIcon />
-              </button>
-            )}
-
-            {/* Call now */}
-            {fu.leadId && (
-              <button
-                style={S.actionBtn}
-                title="Call now"
-                onClick={() => onCallNow(fu)}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${COLORS.success}60`; e.currentTarget.style.color = COLORS.success; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textSecondary; }}
-              >
-                <PhoneIcon />
-              </button>
-            )}
-
-            {/* Reschedule */}
-            <button
-              style={S.actionBtn}
-              title="Reschedule"
-              onClick={() => onReschedule(fu)}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${COLORS.warning}60`; e.currentTarget.style.color = COLORS.warning; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textSecondary; }}
-            >
-              <ClockIcon />
-              <span>Reschedule</span>
-            </button>
-
-            {/* Mark done */}
-            <button
-              style={S.actionBtn}
-              title="Mark as done"
-              onClick={handleDone}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${COLORS.success}60`; e.currentTarget.style.color = COLORS.success; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textSecondary; }}
-            >
-              <CheckIcon />
-              <span>Done</span>
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MyFollowUps Component
-// ─────────────────────────────────────────────────────────────────────────────
+export const MyFollowUps=()=>{
+  const navigate=useNavigate();
+  const{currentUser,companyId}=useAuth();
+  const[followups,setFollowups]=useState(null);
+  const[filter,setFilter]=useState("pending");
+  const[reTarget,setReTarget]=useState(null);
+  const[reDate,setReDate]=useState("");
+  const[reTime,setReTime]=useState("");
+  const[reNote,setReNote]=useState("");
+  const[saving,setSaving]=useState(false);
+  const[toast,setToast]=useState(null);
+  const toastRef=useRef();
 
-export const MyFollowUps = () => {
-  const { currentUser, companyId } = useAuth();
-  const navigate = useNavigate();
+  const showToast=(msg,color=T.success)=>{clearTimeout(toastRef.current);setToast({msg,color});toastRef.current=setTimeout(()=>setToast(null),3000);};
 
-  // ─── Data state ─────────────────────────────────────────────────────────────
-  const [followups, setFollowups] = useState(null);
-
-  // ─── UI state ───────────────────────────────────────────────────────────────
-  const [activeFilter, setActiveFilter] = useState("pending"); // pending | overdue | today | done | all
-  const [rescheduleTarget, setRescheduleTarget] = useState(null); // fu doc being rescheduled
-  const [reDate,  setReDate]  = useState("");
-  const [reTime,  setReTime]  = useState("");
-  const [reNote,  setReNote]  = useState("");
-  const [saving,  setSaving]  = useState(false);
-  const [toast,   setToast]   = useState(null);
-  const toastRef = useRef(null);
-
-  // ─── Style helpers ───────────────────────────────────────────────────────────
-  const showToast = (msg, color = COLORS.success) => {
-    clearTimeout(toastRef.current);
-    setToast({ msg, color });
-    toastRef.current = setTimeout(() => setToast(null), 3000);
-  };
-
-  // ─── Firestore real-time listener ───────────────────────────────────────────
-  useEffect(() => {
+  useEffect(()=>{
     injectStyles();
-    if (!currentUser || !companyId) return;
+    if(!currentUser||!companyId)return;
+    const q=query(collection(db,COLLECTIONS.FOLLOW_UPS),where("agentId","==",currentUser.uid),where("companyId","==",companyId),orderBy("scheduledAt","asc"));
+    const u=onSnapshot(q,snap=>setFollowups(snap.docs.map(d=>({id:d.id,...d.data()}))),err=>console.error(err));
+    return()=>u();
+  },[currentUser,companyId]);
 
-    const q = query(
-      collection(db, COLLECTIONS.FOLLOW_UPS),
-      where("agentId",   "==", currentUser.uid),
-      where("companyId", "==", companyId),
-      orderBy("scheduledAt", "asc")
-    );
+  const counts=useMemo(()=>{
+    if(!followups)return{};
+    return{
+      pending:followups.filter(f=>f.status==="pending").length,
+      overdue:followups.filter(f=>bucket(f)==="overdue").length,
+      today:  followups.filter(f=>bucket(f)==="today").length,
+      done:   followups.filter(f=>f.status==="done").length,
+      all:    followups.length,
+    };
+  },[followups]);
 
-    const unsub = onSnapshot(q, (snap) => {
-      setFollowups(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    }, (err) => {
-      console.error("MyFollowUps snapshot error:", err);
-    });
-
-    return () => unsub();
-  }, [currentUser, companyId]);
-
-  // ─── Counts for filter tabs ─────────────────────────────────────────────────
-  const counts = useMemo(() => {
-    if (!followups) return {};
-    const pending  = followups.filter((f) => f.status === "pending").length;
-    const overdue  = followups.filter((f) => bucket(f) === "overdue").length;
-    const today    = followups.filter((f) => bucket(f) === "today").length;
-    const done     = followups.filter((f) => f.status === "done").length;
-    return { pending, overdue, today, done, all: followups.length };
-  }, [followups]);
-
-  // ─── Filtered list ──────────────────────────────────────────────────────────
-  const filtered = useMemo(() => {
-    if (!followups) return [];
-    switch (activeFilter) {
-      case "overdue":  return followups.filter((f) => bucket(f) === "overdue");
-      case "today":    return followups.filter((f) => bucket(f) === "today");
-      case "done":     return followups.filter((f) => f.status === "done");
-      case "all":      return followups;
-      default:         return followups.filter((f) => f.status === "pending");
+  const filtered=useMemo(()=>{
+    if(!followups)return[];
+    switch(filter){
+      case"overdue":return followups.filter(f=>bucket(f)==="overdue");
+      case"today":  return followups.filter(f=>bucket(f)==="today");
+      case"done":   return followups.filter(f=>f.status==="done");
+      case"all":    return followups;
+      default:      return followups.filter(f=>f.status==="pending");
     }
-  }, [followups, activeFilter]);
+  },[followups,filter]);
 
-  // ─── Group pending by date ───────────────────────────────────────────────────
-  const grouped = useMemo(() => {
-    if (activeFilter === "done" || activeFilter === "all") return null;
-    const groups = {};
-    filtered.forEach((fu) => {
-      const key = isoDate(fu.scheduledAt) || "unknown";
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(fu);
-    });
-    return groups;
-  }, [filtered, activeFilter]);
+  // Grouped by date for pending/overdue/today
+  const grouped=useMemo(()=>{
+    if(filter==="done"||filter==="all")return null;
+    const g={};
+    filtered.forEach(fu=>{const k=isoDate(fu.scheduledAt)||"unknown";if(!g[k])g[k]=[];g[k].push(fu);});
+    return g;
+  },[filtered,filter]);
 
-  // ─── Mark done ──────────────────────────────────────────────────────────────
-  const handleDone = async (fuId) => {
-    try {
-      await updateDoc(doc(db, COLLECTIONS.FOLLOW_UPS, fuId), {
-        status:      "done",
-        completedAt: serverTimestamp(),
-        updatedAt:   serverTimestamp(),
-      });
-      showToast("Follow-up marked as done ✓");
-    } catch (err) {
-      console.error("TIRAS: Could not mark done", err);
-      showToast("Could not update. Try again.", COLORS.danger);
-    }
+  const handleDone=async(id)=>{
+    try{await updateDoc(doc(db,COLLECTIONS.FOLLOW_UPS,id),{status:"done",completedAt:serverTimestamp(),updatedAt:serverTimestamp()});showToast("Follow-up marked as done ✓");}
+    catch{showToast("Could not update",T.accent);}
   };
 
-  // ─── Open reschedule modal ───────────────────────────────────────────────────
-  const openReschedule = (fu) => {
-    setRescheduleTarget(fu);
-    setReDate(isoDate(fu.scheduledAt) || "");
-    setReTime(isoTime(fu.scheduledAt) || "");
-    setReNote(fu.note || "");
+  const openReschedule=fu=>{setReTarget(fu);setReDate(isoDate(fu.scheduledAt)||"");setReTime(isoTime(fu.scheduledAt)||"");setReNote(fu.note||"");};
+
+  const handleReschedule=async()=>{
+    if(!reDate||!reTime||!reTarget)return;setSaving(true);
+    try{
+      const nd=new Date(`${reDate}T${reTime}`);
+      await updateDoc(doc(db,COLLECTIONS.FOLLOW_UPS,reTarget.id),{scheduledAt:Timestamp.fromDate(nd),note:reNote.trim(),status:"pending",updatedAt:serverTimestamp()});
+      if(reTarget.leadId)await updateDoc(doc(db,COLLECTIONS.LEADS,reTarget.leadId),{nextFollowupAt:Timestamp.fromDate(nd),updatedAt:serverTimestamp()});
+      setReTarget(null);showToast("Follow-up rescheduled");
+    }catch{showToast("Could not reschedule",T.accent);}
+    finally{setSaving(false);}
   };
 
-  // ─── Save reschedule ─────────────────────────────────────────────────────────
-  const handleReschedule = async () => {
-    if (!reDate || !reTime || !rescheduleTarget) return;
-    setSaving(true);
-    try {
-      const { Timestamp } = await import("firebase/firestore");
-      const newDate = new Date(`${reDate}T${reTime}`);
-      await updateDoc(doc(db, COLLECTIONS.FOLLOW_UPS, rescheduleTarget.id), {
-        scheduledAt: Timestamp.fromDate(newDate),
-        note:        reNote.trim(),
-        status:      "pending",
-        updatedAt:   serverTimestamp(),
-      });
-      // Also update lead's nextFollowupAt
-      if (rescheduleTarget.leadId) {
-        await updateDoc(doc(db, COLLECTIONS.LEADS, rescheduleTarget.leadId), {
-          nextFollowupAt: Timestamp.fromDate(newDate),
-          updatedAt:      serverTimestamp(),
-        });
-      }
-      setRescheduleTarget(null);
-      showToast("Follow-up rescheduled");
-    } catch (err) {
-      console.error("TIRAS: Reschedule failed", err);
-      showToast("Could not reschedule. Try again.", COLORS.danger);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const FILTERS=[{k:"pending",l:"Pending",c:T.gold},{k:"overdue",l:"Overdue",c:T.accent},{k:"today",l:"Today",c:T.gold},{k:"done",l:"Done",c:T.success},{k:"all",l:"All",c:T.sub}];
+  const inp={backgroundColor:T.bg,border:`1px solid ${T.border}`,borderRadius:"8px",color:T.text,fontFamily:"'DM Sans',sans-serif",fontSize:"14px",padding:"10px 14px",outline:"none",width:"100%",boxSizing:"border-box",marginBottom:"14px"};
+  const btnP={backgroundColor:T.gold,color:"#000",border:"none",borderRadius:"8px",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:700,padding:"9px 18px",cursor:"pointer",transition:"all .15s"};
+  const btnS={backgroundColor:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:"8px",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:500,padding:"9px 18px",cursor:"pointer",transition:"all .15s"};
 
-  // ─── Navigation helpers ──────────────────────────────────────────────────────
-  const handleCallNow = (fu) => {
-    navigate("/agent/call", {
-      state: {
-        lead: { id: fu.leadId, name: fu.leadName, phone: fu.leadPhone ?? null },
-      },
-    });
-  };
-
-  const handleViewLead = (leadId) => navigate(`/agent/lead/${leadId}`);
-
-  // ─── Render date group label ─────────────────────────────────────────────────
-  const dateLabel = (isoKey) => {
-    if (isoKey === "unknown") return "Unscheduled";
-    const d = new Date(isoKey + "T00:00:00");
-    const today    = new Date(); today.setHours(0,0,0,0);
-    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(0,0,0,0);
-    if (d.getTime() === today.getTime())    return "Today";
-    if (d.getTime() === tomorrow.getTime()) return "Tomorrow";
-    if (d < today) return `Overdue — ${d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}`;
-    return d.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
-  };
-
-  const FILTERS = [
-    { key: "pending",  label: "Pending",  color: COLORS.primary },
-    { key: "overdue",  label: "Overdue",  color: COLORS.danger  },
-    { key: "today",    label: "Today",    color: COLORS.accent  },
-    { key: "done",     label: "Done",     color: COLORS.success },
-    { key: "all",      label: "All",      color: COLORS.textMuted },
-  ];
-
-  // ─── Render ───────────────────────────────────────────────────────────────────
-  return (
-    <div style={S.page}>
-
+  return(
+    <div style={{minHeight:"100%",backgroundColor:T.bg,fontFamily:"'DM Sans',sans-serif",color:T.text,padding:"28px"}} className="v2pad">
       {/* Header */}
-      <div style={S.pageHeader}>
-        <div>
-          <div style={S.pageTitle}>My Follow-ups</div>
-          <div style={S.pageSubtitle}>
-            {followups !== null
-              ? `${counts.pending ?? 0} pending · ${counts.overdue ?? 0} overdue`
-              : "Loading…"}
-          </div>
-        </div>
+      <div style={{marginBottom:"24px",animation:"v2fu .3s ease both"}}>
+        <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:"26px",fontWeight:700,color:T.text,letterSpacing:"-0.01em",marginBottom:"4px"}}>My Follow-ups</h1>
+        <p style={{color:T.sub,fontSize:"14px"}}>{followups!==null?`${counts.pending??0} pending · ${counts.overdue??0} overdue`:"Loading…"}</p>
       </div>
 
-      {/* Stats row */}
-      {followups !== null && (
-        <div style={S.statsRow}>
-          {[
-            { label: "Pending",  value: counts.pending,  color: COLORS.primary },
-            { label: "Overdue",  value: counts.overdue,  color: COLORS.danger  },
-            { label: "Due Today",value: counts.today,    color: COLORS.accent  },
-            { label: "Done",     value: counts.done,     color: COLORS.success },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={S.statCard}>
-              <div style={{ ...S.statAccent, backgroundColor: color }} />
-              <div style={S.statLabel}>{label}</div>
-              <div style={{ ...S.statValue, color }}>{value ?? 0}</div>
+      {/* Stats */}
+      {followups!==null&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"12px",marginBottom:"24px",animation:"v2fu .3s ease 50ms both"}} className="v2stats">
+          {[{l:"Pending",v:counts.pending,c:T.gold},{l:"Overdue",v:counts.overdue,c:T.accent},{l:"Due Today",v:counts.today,c:T.gold},{l:"Done",v:counts.done,c:T.success}].map(({l,v,c})=>(
+            <div key={l} style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",padding:"16px 18px",position:"relative",overflow:"hidden"}}>
+              <div style={{position:"absolute",top:0,left:0,right:0,height:"2px",backgroundColor:c}}/>
+              <div style={{color:T.sub,fontSize:"10px",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"8px"}}>{l}</div>
+              <div style={{fontSize:"30px",fontWeight:700,color:c,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{v??0}</div>
             </div>
           ))}
         </div>
       )}
 
       {/* Filter tabs */}
-      <div style={S.filterBar}>
-        {FILTERS.map(({ key, label, color }) => {
-          const isActive = activeFilter === key;
-          const count    = counts[key] ?? 0;
-          return (
-            <button
-              key={key}
-              style={{
-                ...S.filterTab,
-                ...(isActive
-                  ? { ...S.filterTabActive, backgroundColor: color, borderColor: color }
-                  : { color: COLORS.textSecondary }),
-              }}
-              onClick={() => setActiveFilter(key)}
-            >
-              {label}
-              {count > 0 && (
-                <span style={{
-                  ...S.filterTabCount,
-                  backgroundColor: isActive ? "rgba(0,0,0,0.2)" : COLORS.surfaceActive,
-                  color:           isActive ? "#121212" : COLORS.textMuted,
-                }}>
-                  {count}
-                </span>
-              )}
+      <div style={{display:"flex",gap:"6px",marginBottom:"24px",flexWrap:"wrap",animation:"v2fu .3s ease 80ms both"}}>
+        {FILTERS.map(({k,l,c})=>{
+          const active=filter===k;const cnt=counts[k]??0;
+          return(
+            <button key={k} onClick={()=>setFilter(k)}
+              style={{border:`1px solid ${active?c:T.border}`,borderRadius:"20px",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:active?700:500,padding:"7px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px",transition:"all .15s",backgroundColor:active?`${c}18`:"transparent",color:active?c:T.sub,minHeight:"36px"}}>
+              {l}
+              {cnt>0&&<span style={{fontSize:"10px",fontWeight:700,padding:"0 5px",borderRadius:"20px",lineHeight:"1.6",backgroundColor:active?"rgba(0,0,0,.2)":T.border,color:active?c:T.sub}}>{cnt}</span>}
             </button>
           );
         })}
       </div>
 
       {/* Content */}
-      {followups === null ? (
-        <div style={S.loadingWrap}>
-          <div style={S.spinner} />
-          <span>Loading follow-ups…</span>
+      {followups===null?(
+        <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+          {[0,1,2].map(i=>(
+            <div key={i} style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",padding:"16px",display:"flex",gap:"14px",alignItems:"center"}}>
+              <Shim h="8px" w="8px"/><div style={{flex:1}}><Shim h="13px" w="45%"/><div style={{height:"5px"}}/><Shim h="11px" w="30%"/></div><Shim h="30px" w="180px"/>
+            </div>
+          ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <div style={S.emptyState}>
-          <div style={S.emptyIcon}>
-            {activeFilter === "done" ? "✅" : activeFilter === "overdue" ? "⏰" : "📅"}
-          </div>
-          <div style={S.emptyTitle}>
-            {activeFilter === "done"    ? "No completed follow-ups yet"    :
-             activeFilter === "overdue" ? "No overdue follow-ups — great!" :
-             activeFilter === "today"   ? "Nothing due today"              :
-             "No follow-ups scheduled"}
-          </div>
-          <div style={{ color: COLORS.textMuted, fontSize: FONTS.size.sm, marginTop: SPACING.xs }}>
-            {activeFilter === "pending" && "Open a lead and schedule a follow-up from the lead detail page."}
-          </div>
+      ):filtered.length===0?(
+        <div style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"12px",padding:"48px 24px",textAlign:"center"}}>
+          <div style={{fontSize:"32px",marginBottom:"12px",opacity:.4}}>{filter==="done"?"✅":filter==="overdue"?"⏰":"📅"}</div>
+          <div style={{color:T.text,fontSize:"15px",fontWeight:600,marginBottom:"6px"}}>{filter==="done"?"No completed follow-ups":filter==="overdue"?"No overdue follow-ups — great!":"No follow-ups here"}</div>
+          {filter==="pending"&&<div style={{color:T.sub,fontSize:"13px"}}>Open a lead and schedule a follow-up from the lead detail page.</div>}
         </div>
-      ) : grouped ? (
-        // ── Grouped by date (pending / overdue / today) ─────────────────────
-        Object.entries(grouped)
-          .sort(([a], [b]) => new Date(a) - new Date(b))
-          .map(([dateKey, items]) => {
-            const label    = dateLabel(dateKey);
-            const isOD     = label.startsWith("Overdue");
-            return (
-              <div key={dateKey}>
-                <div style={S.sectionHeading}>
-                  <div style={{
-                    width: "8px", height: "8px", borderRadius: "50%",
-                    backgroundColor: isOD ? COLORS.danger : COLORS.primary,
-                    flexShrink: 0,
-                  }} />
-                  <span style={{ ...S.sectionTitle, color: isOD ? COLORS.danger : COLORS.textPrimary }}>
-                    {label}
-                  </span>
-                  <span style={S.sectionCount}>{items.length}</span>
-                </div>
-                {items.map((fu, idx) => (
-                  <FollowUpCard
-                    key={fu.id}
-                    fu={fu}
-                    onDone={handleDone}
-                    onReschedule={openReschedule}
-                    onCallNow={handleCallNow}
-                    onViewLead={handleViewLead}
-                    animDelay={idx * 30}
-                  />
-                ))}
+      ):grouped?(
+        Object.entries(grouped).sort(([a],[b])=>new Date(a)-new Date(b)).map(([dateKey,items])=>{
+          const lbl=dateLabel(dateKey);const isOD=lbl.startsWith("Overdue");
+          return(
+            <div key={dateKey}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"10px",marginTop:"20px"}}>
+                <div style={{width:"7px",height:"7px",borderRadius:"50%",backgroundColor:isOD?T.accent:T.gold,flexShrink:0}}/>
+                <span style={{fontFamily:"'Playfair Display',serif",fontSize:"15px",fontWeight:700,color:isOD?T.accent:T.text}}>{lbl}</span>
+                <span style={{fontSize:"11px",fontWeight:600,padding:"1px 8px",borderRadius:"20px",backgroundColor:"rgba(154,154,154,.08)",color:T.sub}}>{items.length}</span>
               </div>
-            );
-          })
-      ) : (
-        // ── Flat list (all / done) ──────────────────────────────────────────
-        filtered.map((fu, idx) => (
-          <FollowUpCard
-            key={fu.id}
-            fu={fu}
-            onDone={handleDone}
-            onReschedule={openReschedule}
-            onCallNow={handleCallNow}
-            onViewLead={handleViewLead}
-            animDelay={idx * 25}
-          />
-        ))
+              {items.map((fu,idx)=><FUCard key={fu.id} fu={fu} onDone={handleDone} onReschedule={openReschedule} onCall={fu=>navigate("/agent/call",{state:{lead:{id:fu.leadId,name:fu.leadName,phone:fu.leadPhone??null}}})} onView={id=>navigate(`/agent/lead/${id}`)} delay={idx*25}/>)}
+            </div>
+          );
+        })
+      ):(
+        filtered.map((fu,idx)=><FUCard key={fu.id} fu={fu} onDone={handleDone} onReschedule={openReschedule} onCall={fu=>navigate("/agent/call",{state:{lead:{id:fu.leadId,name:fu.leadName,phone:fu.leadPhone??null}}})} onView={id=>navigate(`/agent/lead/${id}`)} delay={idx*25}/>)
       )}
 
-      {/* ── Reschedule modal ─────────────────────────────────────────────────── */}
-      {rescheduleTarget && (
-        <div style={S.modalOverlay} onClick={() => setRescheduleTarget(null)}>
-          <div style={S.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={S.modalHeader}>
-              <span style={S.modalTitle}>Reschedule Follow-up</span>
-              <button style={S.modalCloseBtn} onClick={() => setRescheduleTarget(null)}>×</button>
+      {/* Reschedule modal */}
+      {reTarget&&(
+        <div style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"16px",animation:"v2mbin .2s ease both"}} onClick={()=>setReTarget(null)}>
+          <div style={{backgroundColor:T.surface,border:`1px solid ${T.border}`,borderRadius:"16px",boxShadow:"0 20px 60px rgba(0,0,0,.7)",width:"100%",maxWidth:"420px",animation:"v2mpop .25s ease both",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+            <div style={{height:"3px",background:`linear-gradient(90deg,${T.gold},${T.accent})`}}/>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 24px 12px",borderBottom:`1px solid ${T.border}`}}>
+              <span style={{fontFamily:"'Playfair Display',serif",fontSize:"17px",fontWeight:700,color:T.text}}>Reschedule Follow-up</span>
+              <button style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:"20px",lineHeight:1}} onClick={()=>setReTarget(null)}>×</button>
             </div>
-            <div style={S.modalBody}>
-              {/* Lead name hint */}
-              <div style={{
-                backgroundColor: COLORS.surfaceActive,
-                borderRadius: RADIUS.md,
-                padding: `${SPACING.sm} ${SPACING.md}`,
-                marginBottom: SPACING.base,
-                color: COLORS.textSecondary,
-                fontSize: FONTS.size.sm,
-              }}>
-                <strong style={{ color: COLORS.textPrimary }}>{rescheduleTarget.leadName}</strong>
-                {rescheduleTarget.scheduledAt && (
-                  <span style={{ color: COLORS.textMuted }}> · was {fmtFull(rescheduleTarget.scheduledAt)}</span>
-                )}
+            <div style={{padding:"20px 24px"}}>
+              <div style={{backgroundColor:T.bg,borderRadius:"8px",padding:"10px 14px",marginBottom:"16px",color:T.sub,fontSize:"13px"}}>
+                <strong style={{color:T.text}}>{reTarget.leadName}</strong>{reTarget.scheduledAt&&<span> · was {fmtFull(reTarget.scheduledAt)}</span>}
               </div>
-
-              <label style={S.modalLabel}>New Date</label>
-              <input
-                type="date"
-                value={reDate}
-                onChange={(e) => setReDate(e.target.value)}
-                min={new Date().toISOString().slice(0, 10)}
-                style={S.modalInput}
-              />
-
-              <label style={S.modalLabel}>New Time</label>
-              <input
-                type="time"
-                value={reTime}
-                onChange={(e) => setReTime(e.target.value)}
-                style={S.modalInput}
-              />
-
-              <label style={S.modalLabel}>Note (optional)</label>
-              <input
-                type="text"
-                placeholder="What to discuss…"
-                value={reNote}
-                onChange={(e) => setReNote(e.target.value)}
-                style={S.modalInput}
-              />
+              <div style={{color:T.sub,fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"6px"}}>New Date</div>
+              <input type="date" value={reDate} onChange={e=>setReDate(e.target.value)} min={new Date().toISOString().slice(0,10)} style={inp} onFocus={e=>e.target.style.border=`1px solid ${T.gold}`} onBlur={e=>e.target.style.border=`1px solid ${T.border}`}/>
+              <div style={{color:T.sub,fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"6px"}}>New Time</div>
+              <input type="time" value={reTime} onChange={e=>setReTime(e.target.value)} style={inp} onFocus={e=>e.target.style.border=`1px solid ${T.gold}`} onBlur={e=>e.target.style.border=`1px solid ${T.border}`}/>
+              <div style={{color:T.sub,fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"6px"}}>Note (optional)</div>
+              <input type="text" placeholder="What to discuss…" value={reNote} onChange={e=>setReNote(e.target.value)} style={{...inp,marginBottom:0}} onFocus={e=>e.target.style.border=`1px solid ${T.gold}`} onBlur={e=>e.target.style.border=`1px solid ${T.border}`}/>
             </div>
-            <div style={S.modalFooter}>
-              <button style={S.btnSecondary} onClick={() => setRescheduleTarget(null)}>
-                Cancel
-              </button>
-              <button
-                style={{ ...S.btnPrimary, opacity: saving || !reDate || !reTime ? 0.6 : 1 }}
-                onClick={handleReschedule}
-                disabled={saving || !reDate || !reTime}
-              >
-                {saving ? "Saving…" : "Reschedule"}
-              </button>
+            <div style={{padding:"12px 24px 20px",display:"flex",gap:"8px",justifyContent:"flex-end"}}>
+              <button className="v2sbtn" style={btnS} onClick={()=>setReTarget(null)}>Cancel</button>
+              <button className="v2pbtn" style={{...btnP,opacity:saving||!reDate||!reTime?.6:1}} onClick={handleReschedule} disabled={saving||!reDate||!reTime}>{saving?"Saving…":"Reschedule"}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Toast */}
-      {toast && (
-        <div style={{ ...S.toast, borderLeft: `3px solid ${toast.color}` }}>
-          <span style={{ color: toast.color }}>{toast.color === COLORS.danger ? "✕" : "✓"}</span>
-          {toast.msg}
-        </div>
-      )}
-
+      {toast&&<div style={{position:"fixed",bottom:"24px",right:"24px",backgroundColor:T.surface,border:`1px solid ${T.border}`,borderLeft:`3px solid ${toast.color}`,borderRadius:"10px",padding:"12px 18px",color:T.text,fontSize:"13px",fontWeight:500,boxShadow:"0 8px 32px rgba(0,0,0,.5)",zIndex:9999,display:"flex",alignItems:"center",gap:"8px",animation:"v2tin .3s ease both"}}>
+        <span style={{color:toast.color}}>{toast.color===T.accent?"✕":"✓"}</span>{toast.msg}
+      </div>}
     </div>
   );
 };
-
 export default MyFollowUps;

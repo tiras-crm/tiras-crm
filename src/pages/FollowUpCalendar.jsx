@@ -1,352 +1,131 @@
-// TIRAS CRM — Follow-Up Calendar View
-// Manager sees all team follow-ups in Day / Week / Month calendar views
-// Overdue = red, Today = amber, Completed = muted green, Upcoming = copper
-// Queries: followups where managerId == currentUser.uid + companyId
+// TIRAS CRM V2 — FollowUpCalendar.jsx
+// Manager: Day / Week / Month calendar of all team follow-ups
+// Real-time onSnapshot | Click chip to see detail drawer | Obsidian Gold
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  Timestamp,
-} from "firebase/firestore";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { collection, query, where, onSnapshot, Timestamp } from "firebase/firestore";
 import { db, COLLECTIONS } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
-import {
-  COLORS,
-  FONTS,
-  SPACING,
-  RADIUS,
-  SHADOWS,
-  STYLES,
-  TRANSITIONS,
-} from "../theme";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Tokens ──────────────────────────────────────────────────────────────────
+const C = {
+  bg:"#121212",surface:"#1A1A1B",surfaceHov:"#222223",border:"#2A2A2B",
+  gold:"#D4AF37",goldMuted:"rgba(212,175,55,0.12)",
+  red:"#E63946",redMuted:"rgba(230,57,70,0.12)",
+  green:"#10B981",greenMuted:"rgba(16,185,129,0.12)",
+  blue:"#3B82F6",blueMuted:"rgba(59,130,246,0.12)",
+  warn:"#F59E0B",warnMuted:"rgba(245,158,11,0.12)",
+  text:"#F5F5F5",textSub:"#9A9A9A",textMuted:"#555555",
+};
+const F = { heading:"'Playfair Display',Georgia,serif", body:"'DM Sans',system-ui,sans-serif" };
 
-const VIEWS = ["Day", "Week", "Month"];
-
-const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_NAMES_FULL  = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTH_NAMES     = ["January", "February", "March", "April", "May", "June",
-                         "July", "August", "September", "October", "November", "December"];
+const DAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MONTHS     = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const MONTHS_S   = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const STATUS_META = {
-  completed: { color: COLORS.success,  bg: COLORS.successMuted, label: "Done",    dot: "●" },
-  pending:   { color: COLORS.primary,  bg: COLORS.primaryMuted, label: "Pending", dot: "○" },
-  scheduled: { color: COLORS.info,     bg: COLORS.infoMuted,    label: "Set",     dot: "○" },
-  overdue:   { color: COLORS.danger,   bg: COLORS.dangerMuted,  label: "Overdue", dot: "!" },
+  completed:{ color:C.green, bg:C.greenMuted, label:"Done"    },
+  pending:  { color:C.gold,  bg:C.goldMuted,  label:"Pending" },
+  scheduled:{ color:C.blue,  bg:C.blueMuted,  label:"Set"     },
+  overdue:  { color:C.red,   bg:C.redMuted,   label:"Overdue" },
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+const today0 = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
+const sameDay = (a,b) => a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+const addDays  = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
+const weekStart= d => { const r=new Date(d); r.setDate(r.getDate()-r.getDay()); r.setHours(0,0,0,0); return r; };
+const fmtTime  = ts => { if(!ts) return ""; const d=ts.toDate?ts.toDate():new Date(ts); return d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",hour12:true}); };
+const fmtDateLong = d => d.toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
 
-const today = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-const sameDay = (a, b) =>
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth()    === b.getMonth()    &&
-  a.getDate()     === b.getDate();
-
-const addDays = (d, n) => {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-};
-
-const startOfWeek = (d) => {
-  const r = new Date(d);
-  r.setDate(r.getDate() - r.getDay());
-  r.setHours(0, 0, 0, 0);
-  return r;
-};
-
-const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
-const endOfMonth   = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-
-const fmtTime = (ts) => {
-  if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
-};
-
-const fmtDayFull = (d) =>
-  d.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-
-const fmtWeekRange = (d) => {
-  const s = startOfWeek(d);
-  const e = addDays(s, 6);
-  const sStr = s.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-  const eStr = e.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-  return `${sStr} – ${eStr}`;
-};
-
-// Resolve effective status of a follow-up
-const resolveStatus = (fu) => {
-  if (fu.status === "completed") return "completed";
+const resolveStatus = fu => {
+  if (fu.status==="completed") return "completed";
   const ts = fu.scheduledAt?.toDate ? fu.scheduledAt.toDate() : null;
   if (ts && ts < new Date()) return "overdue";
-  return fu.status || "pending";
+  return fu.status||"pending";
 };
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+const Shimmer = ({w="100%",h=14,r=6}) => <div style={{width:w,height:h,borderRadius:r,background:`linear-gradient(90deg,${C.surface} 25%,#252526 50%,${C.surface} 75%)`,backgroundSize:"200% 100%",animation:"shimmer 1.4s infinite"}} />;
 
-const Shimmer = ({ width = "100%", height = "16px", radius = RADIUS.base }) => (
-  <div style={{
-    width, height, borderRadius: radius,
-    background: `linear-gradient(90deg, ${COLORS.surface} 25%, #2a2a2a 50%, ${COLORS.surface} 75%)`,
-    backgroundSize: "200% 100%",
-    animation: "shimmer 1.4s infinite",
-  }} />
-);
-
-// Compact follow-up chip for month/week cells
+// ─── Follow-up chip (month/week cell) ────────────────────────────────────────
 const FuChip = ({ fu, onClick }) => {
   const status = resolveStatus(fu);
-  const meta   = STATUS_META[status];
-  const timeStr = fmtTime(fu.scheduledAt);
-
+  const m = STATUS_META[status];
   return (
-    <div
-      onClick={() => onClick(fu)}
-      style={{
-        backgroundColor: meta.bg,
-        border: `1px solid ${meta.color}44`,
-        borderLeft: `3px solid ${meta.color}`,
-        borderRadius: RADIUS.sm,
-        padding: `2px ${SPACING.xs}`,
-        fontSize: "11px",
-        color: meta.color,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        gap: "3px",
-        overflow: "hidden",
-        whiteSpace: "nowrap",
-        textOverflow: "ellipsis",
-        transition: TRANSITIONS.fast,
-        marginBottom: "2px",
-      }}
-      title={`${fu.leadName || "Lead"} — ${timeStr}`}
-    >
-      <span style={{ flexShrink: 0, fontSize: "9px" }}>{meta.dot}</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-        {timeStr && <span style={{ opacity: 0.75, marginRight: "3px" }}>{timeStr}</span>}
-        {fu.leadName || "Lead"}
-      </span>
+    <div onClick={()=>onClick(fu)} style={{backgroundColor:m.bg,borderLeft:`3px solid ${m.color}`,borderRadius:4,padding:"2px 6px",fontSize:10,color:m.color,cursor:"pointer",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",marginBottom:2,fontFamily:F.body,fontWeight:600}}>
+      {fmtTime(fu.scheduledAt)} {fu.leadName||"Lead"}
     </div>
   );
 };
 
-// Detail drawer (slides in from right)
-const DetailDrawer = ({ fu, onClose, agentMap }) => {
+// ─── Detail Drawer ────────────────────────────────────────────────────────────
+const Drawer = ({ fu, agentMap, onClose }) => {
   if (!fu) return null;
-  const status  = resolveStatus(fu);
-  const meta    = STATUS_META[status];
-  const timeStr = fmtTime(fu.scheduledAt);
-  const dateStr = fu.scheduledAt?.toDate
-    ? fu.scheduledAt.toDate().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })
-    : "—";
-
-  return (
-    <>
-      {/* Backdrop */}
-      <div
-        onClick={onClose}
-        style={{
-          position: "fixed", inset: 0,
-          backgroundColor: "rgba(0,0,0,0.5)",
-          zIndex: 100,
-        }}
-      />
-      {/* Drawer */}
-      <div
-        style={{
-          position: "fixed", top: 0, right: 0, bottom: 0,
-          width: "360px",
-          backgroundColor: COLORS.surface,
-          borderLeft: `1px solid ${COLORS.border}`,
-          boxShadow: SHADOWS.lg,
-          zIndex: 101,
-          padding: SPACING.xl,
-          overflowY: "auto",
-          fontFamily: FONTS.family,
-        }}
-      >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: SPACING.xl }}>
-          <div>
-            <span
-              style={{
-                ...STYLES.badge,
-                backgroundColor: meta.bg,
-                color: meta.color,
-                fontSize: FONTS.size.xs,
-                marginBottom: SPACING.sm,
-                display: "inline-flex",
-              }}
-            >
-              {meta.dot} {meta.label}
-            </span>
-            <div style={{ fontSize: FONTS.size["2xl"], fontWeight: FONTS.weight.bold, color: COLORS.textPrimary }}>
-              {fu.leadName || "Unnamed Lead"}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: "none", border: "none", color: COLORS.textMuted,
-              cursor: "pointer", fontSize: FONTS.size["2xl"], padding: 0, lineHeight: 1,
-            }}
-          >
-            ×
-          </button>
+  const status = resolveStatus(fu);
+  const m = STATUS_META[status];
+  const rows = [
+    ["Date",    fu.scheduledAt?.toDate?fu.scheduledAt.toDate().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"}):"—"],
+    ["Time",    fmtTime(fu.scheduledAt)||"—"],
+    ["Agent",   agentMap[fu.agentId]||fu.agentId||"—"],
+    ["Phone",   fu.leadPhone||"—"],
+    ["Status",  m.label],
+    ["Source",  fu.leadSource||"—"],
+  ];
+  return (<>
+    <div onClick={onClose} style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.6)",zIndex:100}} />
+    <div style={{position:"fixed",top:0,right:0,bottom:0,width:"min(360px,100vw)",backgroundColor:C.surface,borderLeft:`1px solid ${C.border}`,zIndex:101,padding:24,overflowY:"auto",fontFamily:F.body}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:20}}>
+        <div>
+          <span style={{fontFamily:F.body,fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,backgroundColor:m.bg,color:m.color,display:"inline-block",marginBottom:8}}>{m.label}</span>
+          <div style={{fontFamily:F.heading,fontSize:20,fontWeight:700,color:C.text}}>{fu.leadName||"Lead"}</div>
         </div>
-
-        {/* Details */}
-        {[
-          { label: "Date",    value: dateStr },
-          { label: "Time",    value: timeStr || "—" },
-          { label: "Agent",   value: agentMap[fu.agentId] || fu.agentId || "—" },
-          { label: "Phone",   value: fu.leadPhone || "—" },
-          { label: "Status",  value: meta.label },
-          { label: "Source",  value: fu.leadSource || "—" },
-        ].map(({ label, value }) => (
-          <div
-            key={label}
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              padding: `${SPACING.sm} 0`,
-              borderBottom: `1px solid ${COLORS.border}`,
-            }}
-          >
-            <span style={{ fontSize: FONTS.size.sm, color: COLORS.textMuted }}>{label}</span>
-            <span style={{ fontSize: FONTS.size.sm, color: COLORS.textPrimary, fontWeight: FONTS.weight.medium, textAlign: "right", maxWidth: "60%" }}>
-              {value}
-            </span>
-          </div>
-        ))}
-
-        {/* Note */}
-        {fu.note && (
-          <div style={{ marginTop: SPACING.base }}>
-            <div style={{ fontSize: FONTS.size.xs, color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: SPACING.xs }}>
-              Note
-            </div>
-            <div style={{
-              backgroundColor: COLORS.surfaceActive,
-              borderRadius: RADIUS.md,
-              padding: SPACING.md,
-              fontSize: FONTS.size.sm,
-              color: COLORS.textSecondary,
-              lineHeight: 1.6,
-            }}>
-              {fu.note}
-            </div>
-          </div>
-        )}
+        <button onClick={onClose} style={{background:"none",border:"none",color:C.textSub,cursor:"pointer",fontSize:22,lineHeight:1,padding:0,marginLeft:12}}>×</button>
       </div>
-    </>
-  );
+      {rows.map(([label,value])=>(
+        <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+          <span style={{fontSize:13,color:C.textSub}}>{label}</span>
+          <span style={{fontSize:13,color:C.text,fontWeight:600,textAlign:"right",maxWidth:"60%"}}>{value}</span>
+        </div>
+      ))}
+      {fu.note&&<div style={{marginTop:16,backgroundColor:C.surfaceHov,borderRadius:8,padding:14,fontSize:13,color:C.textSub,lineHeight:1.6,fontStyle:"italic"}}>"{fu.note}"</div>}
+    </div>
+  </>);
 };
 
 // ─── Month View ───────────────────────────────────────────────────────────────
-
-const MonthView = ({ cursor, followUps, onFuClick, agentFilter, agentMap }) => {
-  const first  = startOfMonth(cursor);
-  const last   = endOfMonth(cursor);
-  const todayD = today();
-
-  // Build 6-week grid
-  const gridStart = startOfWeek(first);
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    cells.push(addDays(gridStart, i));
-  }
-
-  const fuForDay = (d) =>
-    followUps.filter((fu) => {
-      if (agentFilter !== "all" && fu.agentId !== agentFilter) return false;
-      const ts = fu.scheduledAt?.toDate ? fu.scheduledAt.toDate() : null;
-      return ts && sameDay(ts, d);
-    }).sort((a, b) => {
-      const ta = a.scheduledAt?.seconds || 0;
-      const tb = b.scheduledAt?.seconds || 0;
-      return ta - tb;
-    });
+const MonthView = ({ cursor, fus, agentFilter, agentMap, onChipClick }) => {
+  const tod = today0();
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const gridStart = weekStart(first);
+  const cells = Array.from({length:42}, (_,i) => addDays(gridStart, i));
+  const fuForDay = d => fus.filter(fu => {
+    if (agentFilter!=="all" && fu.agentId!==agentFilter) return false;
+    const ts = fu.scheduledAt?.toDate?fu.scheduledAt.toDate():null;
+    return ts && sameDay(ts, d);
+  }).sort((a,b)=>(a.scheduledAt?.seconds||0)-(b.scheduledAt?.seconds||0));
 
   return (
-    <div style={{ flex: 1, overflow: "hidden" }}>
-      {/* Day headers */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: `1px solid ${COLORS.border}` }}>
-        {DAY_NAMES_SHORT.map((d) => (
-          <div key={d} style={{ ...STYLES.tableHeader, textAlign: "center", padding: `${SPACING.sm} 0` }}>{d}</div>
-        ))}
+    <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:`1px solid ${C.border}`}}>
+        {DAYS_SHORT.map(d=><div key={d} style={{fontFamily:F.body,fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.08em",textAlign:"center",padding:"10px 0"}}>{d}</div>)}
       </div>
-
-      {/* Weeks */}
-      <div style={{ display: "grid", gridTemplateRows: "repeat(6, 1fr)", height: "calc(100% - 36px)" }}>
-        {Array.from({ length: 6 }).map((_, wi) => (
-          <div
-            key={wi}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(7, 1fr)",
-              borderBottom: `1px solid ${COLORS.border}`,
-            }}
-          >
-            {Array.from({ length: 7 }).map((_, di) => {
-              const cellDate   = cells[wi * 7 + di];
-              const isToday    = sameDay(cellDate, todayD);
-              const inMonth    = cellDate.getMonth() === cursor.getMonth();
-              const dayFus     = fuForDay(cellDate);
-              const MAX_SHOWN  = 3;
-
+      <div style={{flex:1,display:"grid",gridTemplateRows:"repeat(6,1fr)",overflow:"hidden"}}>
+        {Array.from({length:6}).map((_,wi)=>(
+          <div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:`1px solid ${C.border}`}}>
+            {Array.from({length:7}).map((_,di)=>{
+              const cell = cells[wi*7+di];
+              const isToday = sameDay(cell, tod);
+              const inMonth = cell.getMonth()===cursor.getMonth();
+              const dayFus  = fuForDay(cell);
               return (
-                <div
-                  key={di}
-                  style={{
-                    borderRight: di < 6 ? `1px solid ${COLORS.border}` : "none",
-                    padding: `${SPACING.xs} ${SPACING.xs}`,
-                    minHeight: "90px",
-                    backgroundColor: isToday ? COLORS.primaryMuted + "44" : "transparent",
-                    overflow: "hidden",
-                  }}
-                >
-                  {/* Day number */}
-                  <div style={{ marginBottom: "3px", textAlign: "right" }}>
-                    <span
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: "22px",
-                        height: "22px",
-                        borderRadius: "50%",
-                        fontSize: FONTS.size.xs,
-                        fontWeight: isToday ? FONTS.weight.bold : FONTS.weight.regular,
-                        color: isToday ? COLORS.textInverse : inMonth ? COLORS.textSecondary : COLORS.textMuted,
-                        backgroundColor: isToday ? COLORS.primary : "transparent",
-                      }}
-                    >
-                      {cellDate.getDate()}
+                <div key={di} style={{borderRight:di<6?`1px solid ${C.border}`:"none",padding:4,minHeight:80,backgroundColor:isToday?C.goldMuted:"transparent",overflow:"hidden"}}>
+                  <div style={{textAlign:"right",marginBottom:3}}>
+                    <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:22,height:22,borderRadius:"50%",fontFamily:F.body,fontSize:12,fontWeight:isToday?700:400,backgroundColor:isToday?C.gold:"transparent",color:isToday?"#000":inMonth?C.textSub:C.textMuted}}>
+                      {cell.getDate()}
                     </span>
                   </div>
-
-                  {/* Follow-up chips */}
-                  {dayFus.slice(0, MAX_SHOWN).map((fu) => (
-                    <FuChip key={fu.id} fu={fu} onClick={onFuClick} />
-                  ))}
-                  {dayFus.length > MAX_SHOWN && (
-                    <div style={{ fontSize: "10px", color: COLORS.textMuted, padding: "1px 3px" }}>
-                      +{dayFus.length - MAX_SHOWN} more
-                    </div>
-                  )}
+                  {dayFus.slice(0,3).map(fu=><FuChip key={fu.id} fu={fu} onClick={onChipClick} />)}
+                  {dayFus.length>3&&<div style={{fontFamily:F.body,fontSize:10,color:C.textMuted,padding:"0 4px"}}>+{dayFus.length-3} more</div>}
                 </div>
               );
             })}
@@ -358,107 +137,39 @@ const MonthView = ({ cursor, followUps, onFuClick, agentFilter, agentMap }) => {
 };
 
 // ─── Week View ────────────────────────────────────────────────────────────────
-
-const WeekView = ({ cursor, followUps, onFuClick, agentFilter }) => {
-  const weekStart = startOfWeek(cursor);
-  const todayD    = today();
-  const days      = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-
-  const fuForDay = (d) =>
-    followUps.filter((fu) => {
-      if (agentFilter !== "all" && fu.agentId !== agentFilter) return false;
-      const ts = fu.scheduledAt?.toDate ? fu.scheduledAt.toDate() : null;
-      return ts && sameDay(ts, d);
-    }).sort((a, b) => (a.scheduledAt?.seconds || 0) - (b.scheduledAt?.seconds || 0));
-
+const WeekView = ({ cursor, fus, agentFilter, onChipClick }) => {
+  const tod = today0();
+  const ws  = weekStart(cursor);
+  const days= Array.from({length:7},(_,i)=>addDays(ws,i));
+  const fuForDay = d => fus.filter(fu=>{
+    if (agentFilter!=="all"&&fu.agentId!==agentFilter) return false;
+    const ts=fu.scheduledAt?.toDate?fu.scheduledAt.toDate():null;
+    return ts&&sameDay(ts,d);
+  }).sort((a,b)=>(a.scheduledAt?.seconds||0)-(b.scheduledAt?.seconds||0));
   return (
-    <div style={{ flex: 1, overflow: "auto" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", minWidth: "700px" }}>
-        {days.map((d, idx) => {
-          const isToday = sameDay(d, todayD);
-          const dayFus  = fuForDay(d);
-
+    <div style={{flex:1,overflowX:"auto",overflowY:"auto"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(120px,1fr))",minWidth:700}}>
+        {days.map((d,i)=>{
+          const isToday=sameDay(d,tod);
+          const dayFus=fuForDay(d);
           return (
-            <div
-              key={idx}
-              style={{
-                borderRight: idx < 6 ? `1px solid ${COLORS.border}` : "none",
-                minHeight: "500px",
-              }}
-            >
-              {/* Day header */}
-              <div
-                style={{
-                  padding: `${SPACING.md} ${SPACING.sm}`,
-                  textAlign: "center",
-                  borderBottom: `1px solid ${COLORS.border}`,
-                  backgroundColor: isToday ? COLORS.primaryMuted + "55" : COLORS.surfaceActive,
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 1,
-                }}
-              >
-                <div style={{ fontSize: FONTS.size.xs, color: COLORS.textMuted }}>{DAY_NAMES_SHORT[d.getDay()]}</div>
-                <div
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: "32px",
-                    height: "32px",
-                    borderRadius: "50%",
-                    margin: "4px auto 0",
-                    backgroundColor: isToday ? COLORS.primary : "transparent",
-                    fontSize: FONTS.size.lg,
-                    fontWeight: FONTS.weight.bold,
-                    color: isToday ? COLORS.textInverse : COLORS.textPrimary,
-                  }}
-                >
-                  {d.getDate()}
-                </div>
-                {dayFus.length > 0 && (
-                  <div style={{ fontSize: "10px", color: isToday ? COLORS.accent : COLORS.textMuted, marginTop: "2px" }}>
-                    {dayFus.length} item{dayFus.length !== 1 ? "s" : ""}
-                  </div>
-                )}
+            <div key={i} style={{borderRight:i<6?`1px solid ${C.border}`:"none",minHeight:480}}>
+              <div style={{padding:"12px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,backgroundColor:isToday?C.goldMuted:C.surface,position:"sticky",top:0,zIndex:1}}>
+                <div style={{fontFamily:F.body,fontSize:10,color:C.textSub,textTransform:"uppercase"}}>{DAYS_SHORT[d.getDay()]}</div>
+                <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:32,height:32,borderRadius:"50%",margin:"4px auto 0",backgroundColor:isToday?C.gold:"transparent",fontFamily:F.heading,fontSize:16,fontWeight:700,color:isToday?"#000":C.text}}>{d.getDate()}</div>
+                {dayFus.length>0&&<div style={{fontFamily:F.body,fontSize:10,color:isToday?C.gold:C.textMuted,marginTop:2}}>{dayFus.length} item{dayFus.length!==1?"s":""}</div>}
               </div>
-
-              {/* Follow-ups */}
-              <div style={{ padding: SPACING.xs }}>
-                {dayFus.length === 0 ? (
-                  <div style={{ textAlign: "center", paddingTop: SPACING.xl, fontSize: "10px", color: COLORS.textMuted }}>—</div>
-                ) : (
-                  dayFus.map((fu) => {
-                    const status = resolveStatus(fu);
-                    const meta   = STATUS_META[status];
-                    return (
-                      <div
-                        key={fu.id}
-                        onClick={() => onFuClick(fu)}
-                        style={{
-                          backgroundColor: meta.bg,
-                          border: `1px solid ${meta.color}44`,
-                          borderLeft: `3px solid ${meta.color}`,
-                          borderRadius: RADIUS.sm,
-                          padding: `${SPACING.sm} ${SPACING.xs}`,
-                          marginBottom: SPACING.xs,
-                          cursor: "pointer",
-                          transition: TRANSITIONS.fast,
-                        }}
-                      >
-                        <div style={{ fontSize: "11px", fontWeight: FONTS.weight.semibold, color: meta.color }}>
-                          {fmtTime(fu.scheduledAt)}
-                        </div>
-                        <div style={{ fontSize: "11px", color: COLORS.textPrimary, marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {fu.leadName || "Lead"}
-                        </div>
-                        <div style={{ fontSize: "10px", color: COLORS.textMuted, marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {fu.agentName || ""}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+              <div style={{padding:6}}>
+                {dayFus.length===0?<div style={{textAlign:"center",paddingTop:24,fontFamily:F.body,fontSize:11,color:C.textMuted}}>—</div>:dayFus.map(fu=>{
+                  const s=resolveStatus(fu); const m=STATUS_META[s];
+                  return (
+                    <div key={fu.id} onClick={()=>onChipClick(fu)} style={{backgroundColor:m.bg,borderLeft:`3px solid ${m.color}`,borderRadius:6,padding:"8px 8px",marginBottom:6,cursor:"pointer"}}>
+                      <div style={{fontFamily:F.body,fontSize:11,fontWeight:700,color:m.color}}>{fmtTime(fu.scheduledAt)}</div>
+                      <div style={{fontFamily:F.body,fontSize:11,color:C.text,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fu.leadName||"Lead"}</div>
+                      <div style={{fontFamily:F.body,fontSize:10,color:C.textMuted,marginTop:1}}>{fu.agentName||""}</div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -469,103 +180,43 @@ const WeekView = ({ cursor, followUps, onFuClick, agentFilter }) => {
 };
 
 // ─── Day View ─────────────────────────────────────────────────────────────────
+const DayView = ({ cursor, fus, agentFilter, agentMap, onChipClick }) => {
+  const tod=today0();
+  const dayFus=fus.filter(fu=>{
+    if(agentFilter!=="all"&&fu.agentId!==agentFilter)return false;
+    const ts=fu.scheduledAt?.toDate?fu.scheduledAt.toDate():null;
+    return ts&&sameDay(ts,cursor);
+  }).sort((a,b)=>(a.scheduledAt?.seconds||0)-(b.scheduledAt?.seconds||0));
 
-const DayView = ({ cursor, followUps, onFuClick, agentFilter, agentMap }) => {
-  const todayD = today();
-  const isToday = sameDay(cursor, todayD);
-
-  const dayFus = followUps
-    .filter((fu) => {
-      if (agentFilter !== "all" && fu.agentId !== agentFilter) return false;
-      const ts = fu.scheduledAt?.toDate ? fu.scheduledAt.toDate() : null;
-      return ts && sameDay(ts, cursor);
-    })
-    .sort((a, b) => (a.scheduledAt?.seconds || 0) - (b.scheduledAt?.seconds || 0));
-
-  if (dayFus.length === 0) {
-    return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: SPACING.base, color: COLORS.textMuted }}>
-        <div style={{ fontSize: "40px" }}>📅</div>
-        <div style={{ fontSize: FONTS.size.base }}>
-          {isToday ? "No follow-ups scheduled for today" : "No follow-ups on this day"}
-        </div>
-      </div>
-    );
-  }
+  if(dayFus.length===0) return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:C.textSub,fontFamily:F.body}}>
+      <div style={{fontSize:40,marginBottom:14}}>📅</div>
+      <div style={{fontSize:15}}>{sameDay(cursor,tod)?"No follow-ups today":"No follow-ups on this day"}</div>
+    </div>
+  );
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: `0 ${SPACING["2xl"]} ${SPACING["2xl"]}` }}>
-      <div style={{ maxWidth: "640px", margin: "0 auto" }}>
-        {dayFus.map((fu, idx) => {
-          const status = resolveStatus(fu);
-          const meta   = STATUS_META[status];
-          const timeStr = fmtTime(fu.scheduledAt);
-
+    <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
+      <div style={{maxWidth:600,margin:"0 auto"}}>
+        {dayFus.map((fu,idx)=>{
+          const s=resolveStatus(fu); const m=STATUS_META[s];
           return (
-            <div
-              key={fu.id}
-              onClick={() => onFuClick(fu)}
-              style={{
-                display: "flex",
-                gap: SPACING.base,
-                marginBottom: SPACING.base,
-                cursor: "pointer",
-              }}
-            >
-              {/* Time column */}
-              <div style={{ width: "56px", flexShrink: 0, textAlign: "right" }}>
-                <div style={{ fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.textMuted, paddingTop: SPACING.md, fontFamily: FONTS.mono }}>
-                  {timeStr || "—"}
-                </div>
+            <div key={fu.id} style={{display:"flex",gap:14,marginBottom:16,cursor:"pointer"}} onClick={()=>onChipClick(fu)}>
+              <div style={{width:60,flexShrink:0,textAlign:"right",paddingTop:14}}>
+                <div style={{fontFamily:"monospace",fontSize:12,fontWeight:600,color:C.textSub}}>{fmtTime(fu.scheduledAt)||"—"}</div>
               </div>
-
-              {/* Timeline line */}
-              <div style={{ width: "2px", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <div style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: meta.color, border: `2px solid ${COLORS.surface}`, zIndex: 1, marginTop: SPACING.base + 3, flexShrink: 0 }} />
-                {idx < dayFus.length - 1 && (
-                  <div style={{ flex: 1, width: "2px", backgroundColor: COLORS.border, marginTop: "4px" }} />
-                )}
+              <div style={{width:2,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center"}}>
+                <div style={{width:10,height:10,borderRadius:"50%",backgroundColor:m.color,marginTop:14,flexShrink:0}} />
+                {idx<dayFus.length-1&&<div style={{flex:1,width:2,backgroundColor:C.border,marginTop:4}} />}
               </div>
-
-              {/* Card */}
-              <div
-                style={{
-                  flex: 1,
-                  backgroundColor: meta.bg,
-                  border: `1px solid ${meta.color}44`,
-                  borderLeft: `4px solid ${meta.color}`,
-                  borderRadius: RADIUS.md,
-                  padding: SPACING.base,
-                  marginBottom: idx < dayFus.length - 1 ? SPACING.sm : 0,
-                  transition: TRANSITIONS.base,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: SPACING.sm }}>
+              <div style={{flex:1,backgroundColor:m.bg,borderLeft:`4px solid ${m.color}`,borderRadius:10,padding:"12px 16px",marginBottom:idx<dayFus.length-1?8:0}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                   <div>
-                    <div style={{ fontSize: FONTS.size.base, fontWeight: FONTS.weight.semibold, color: COLORS.textPrimary }}>
-                      {fu.leadName || "Unnamed Lead"}
-                    </div>
-                    <div style={{ fontSize: FONTS.size.sm, color: COLORS.textSecondary, marginTop: "2px" }}>
-                      Agent: {agentMap[fu.agentId] || "—"}
-                    </div>
-                    {fu.note && (
-                      <div style={{ fontSize: FONTS.size.sm, color: COLORS.textMuted, marginTop: SPACING.xs, fontStyle: "italic" }}>
-                        "{fu.note}"
-                      </div>
-                    )}
+                    <div style={{fontFamily:F.heading,fontSize:15,fontWeight:700,color:C.text}}>{fu.leadName||"Lead"}</div>
+                    <div style={{fontFamily:F.body,fontSize:12,color:C.textSub,marginTop:3}}>Agent: {agentMap[fu.agentId]||"—"}</div>
+                    {fu.note&&<div style={{fontFamily:F.body,fontSize:12,color:C.textMuted,marginTop:6,fontStyle:"italic"}}>"{fu.note}"</div>}
                   </div>
-                  <span
-                    style={{
-                      ...STYLES.badge,
-                      backgroundColor: meta.bg,
-                      color: meta.color,
-                      border: `1px solid ${meta.color}44`,
-                      fontSize: FONTS.size.xs,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {meta.label}
-                  </span>
+                  <span style={{fontFamily:F.body,fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,backgroundColor:m.bg,color:m.color,border:`1px solid ${m.color}44`,flexShrink:0}}>{m.label}</span>
                 </div>
               </div>
             </div>
@@ -577,381 +228,119 @@ const DayView = ({ cursor, followUps, onFuClick, agentFilter, agentMap }) => {
 };
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-
 export const FollowUpCalendar = () => {
   const { currentUser, companyId } = useAuth();
+  const [fus,    setFus]    = useState([]);
+  const [agents, setAgents] = useState([]);
+  const [loading,setLoading]= useState(true);
+  const [view,   setView]   = useState("Month");
+  const [cursor, setCursor] = useState(today0());
+  const [agentF, setAgentF] = useState("all");
+  const [selFu,  setSelFu]  = useState(null);
 
-  const [followUps, setFollowUps] = useState([]);
-  const [agents, setAgents]       = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState(null);
+  useEffect(()=>{
+    if(!currentUser?.uid||!companyId)return;
+    const uid=currentUser.uid;
+    const winStart=new Date(); winStart.setDate(winStart.getDate()-45); winStart.setHours(0,0,0,0);
+    const winEnd=new Date();   winEnd.setDate(winEnd.getDate()+90);     winEnd.setHours(23,59,59,999);
+    let r=0; const ck=()=>{r++;if(r>=2)setLoading(false);};
+    const u1=onSnapshot(query(collection(db,COLLECTIONS.USERS),where("managerId","==",uid),where("companyId","==",companyId)),s=>{setAgents(s.docs.map(d=>({id:d.id,...d.data()})));ck();},e=>{console.error(e);ck();});
+    const u2=onSnapshot(query(collection(db,COLLECTIONS.FOLLOWUPS),where("managerId","==",uid),where("companyId","==",companyId),where("scheduledAt",">=",Timestamp.fromDate(winStart)),where("scheduledAt","<=",Timestamp.fromDate(winEnd))),s=>{setFus(s.docs.map(d=>({id:d.id,...d.data()})));ck();},e=>{console.error(e);ck();});
+    return()=>{u1();u2();};
+  },[currentUser?.uid,companyId]);
 
-  const [view, setView]           = useState("Month");
-  const [cursor, setCursor]       = useState(today()); // date the calendar is "at"
-  const [agentFilter, setAgentFilter] = useState("all");
-  const [selectedFu, setSelectedFu]   = useState(null);
+  const agentMap = useMemo(()=>{const m={};agents.forEach(a=>{m[a.id]=a.displayName||a.email||"Agent";});return m;},[agents]);
 
-  // ─── Fetch ───────────────────────────────────────────────────────────────
-  // Fetch a 3-month window (prev, current, next) so navigation feels instant
-
-  const fetchAll = useCallback(async () => {
-    if (!currentUser?.uid || !companyId) return;
-    try {
-      setLoading(true);
-      const uid = currentUser.uid;
-
-      // Agents
-      const agentsSnap = await getDocs(
-        query(
-          collection(db, COLLECTIONS.USERS),
-          where("managerId", "==", uid),
-          where("companyId", "==", companyId)
-        )
-      );
-      const fetchedAgents = agentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setAgents(fetchedAgents);
-
-      // Date window: 45 days back to 90 days ahead
-      const windowStart = new Date();
-      windowStart.setDate(windowStart.getDate() - 45);
-      windowStart.setHours(0, 0, 0, 0);
-
-      const windowEnd = new Date();
-      windowEnd.setDate(windowEnd.getDate() + 90);
-      windowEnd.setHours(23, 59, 59, 999);
-
-      // Follow-ups
-      const fuSnap = await getDocs(
-        query(
-          collection(db, COLLECTIONS.FOLLOW_UPS),
-          where("managerId", "==", uid),
-          where("companyId", "==", companyId),
-          where("scheduledAt", ">=", Timestamp.fromDate(windowStart)),
-          where("scheduledAt", "<=", Timestamp.fromDate(windowEnd))
-        )
-      );
-      const fetchedFus = fuSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setFollowUps(fetchedFus);
-    } catch (err) {
-      console.error("FollowUpCalendar fetch error:", err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentUser?.uid, companyId]);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  // ─── Navigation ───────────────────────────────────────────────────────────
-
-  const navigate = (dir) => {
-    setCursor((prev) => {
-      const d = new Date(prev);
-      if (view === "Day")   d.setDate(d.getDate() + dir);
-      if (view === "Week")  d.setDate(d.getDate() + dir * 7);
-      if (view === "Month") d.setMonth(d.getMonth() + dir);
-      return d;
-    });
-  };
-
-  const goToday = () => setCursor(today());
-
-  // ─── Derived ─────────────────────────────────────────────────────────────
-
-  const agentMap = useMemo(() => {
-    const m = {};
-    agents.forEach((a) => { m[a.id] = a.displayName || a.email || "Agent"; });
-    return m;
-  }, [agents]);
-
-  // Summary stats
-  const now         = new Date();
-  const todayD      = today();
-  const overdueAll  = followUps.filter((fu) => {
-    const ts = fu.scheduledAt?.toDate ? fu.scheduledAt.toDate() : null;
-    return ts && ts < now && fu.status !== "completed";
+  const nav = dir => setCursor(prev=>{
+    const d=new Date(prev);
+    if(view==="Day")   d.setDate(d.getDate()+dir);
+    if(view==="Week")  d.setDate(d.getDate()+dir*7);
+    if(view==="Month") d.setMonth(d.getMonth()+dir);
+    return d;
   });
-  const dueToday    = followUps.filter((fu) => {
-    const ts = fu.scheduledAt?.toDate ? fu.scheduledAt.toDate() : null;
-    return ts && sameDay(ts, todayD);
-  });
-  const completedToday = dueToday.filter((fu) => fu.status === "completed");
 
-  // Cursor label
-  const cursorLabel = (() => {
-    if (view === "Day")   return fmtDayFull(cursor);
-    if (view === "Week")  return fmtWeekRange(cursor);
-    if (view === "Month") return `${MONTH_NAMES[cursor.getMonth()]} ${cursor.getFullYear()}`;
-  })();
+  const cursorLabel = useMemo(()=>{
+    if(view==="Day")   return fmtDateLong(cursor);
+    if(view==="Week")  { const s=weekStart(cursor),e=addDays(s,6); return `${s.toLocaleDateString("en-IN",{day:"numeric",month:"short"})} – ${e.toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}`; }
+    if(view==="Month") return `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
+  },[view,cursor]);
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  const now=new Date(), tod=today0();
+  const dueToday   = fus.filter(fu=>{const ts=fu.scheduledAt?.toDate?fu.scheduledAt.toDate():null;return ts&&sameDay(ts,tod);});
+  const overdueAll = fus.filter(fu=>{const ts=fu.scheduledAt?.toDate?fu.scheduledAt.toDate():null;return ts&&ts<now&&fu.status!=="completed";});
+  const doneTod    = dueToday.filter(fu=>fu.status==="completed");
 
-  return (
-    <>
-      <style>{`
-        @keyframes shimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
-        }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: ${COLORS.scrollbarTrack}; }
-        ::-webkit-scrollbar-thumb { background: ${COLORS.scrollbarThumb}; border-radius: 3px; }
-      `}</style>
+  return (<>
+    <style>{`@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}*{box-sizing:border-box}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:${C.bg}}::-webkit-scrollbar-thumb{background:${C.border};border-radius:4px}`}</style>
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",backgroundColor:C.bg,fontFamily:F.body,color:C.text,overflow:"hidden"}}>
 
-      <div
-        style={{
-          height: "100vh",
-          display: "flex",
-          flexDirection: "column",
-          backgroundColor: COLORS.background,
-          fontFamily: FONTS.family,
-          color: COLORS.textPrimary,
-          overflow: "hidden",
-        }}
-      >
-        {/* ── Top bar ── */}
-        <div
-          style={{
-            padding: `${SPACING.base} ${SPACING["2xl"]}`,
-            borderBottom: `1px solid ${COLORS.border}`,
-            backgroundColor: COLORS.surface,
-            display: "flex",
-            alignItems: "center",
-            gap: SPACING.base,
-            flexShrink: 0,
-            flexWrap: "wrap",
-          }}
-        >
-          {/* Page title */}
-          <div style={{ marginRight: SPACING.base }}>
-            <div style={{ fontSize: FONTS.size.xs, color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Manager</div>
-            <div style={{ fontSize: FONTS.size.xl, fontWeight: FONTS.weight.bold, color: COLORS.textPrimary, lineHeight: 1.2 }}>
-              Follow-up Calendar
-            </div>
-          </div>
-
-          {/* Stats pills */}
-          {!loading && (
-            <>
-              {[
-                { label: "Due Today",  value: dueToday.length,         color: COLORS.accent  },
-                { label: "Completed",  value: completedToday.length,   color: COLORS.success },
-                { label: "Overdue",    value: overdueAll.length,        color: overdueAll.length > 0 ? COLORS.danger : COLORS.textMuted },
-              ].map(({ label, value, color }) => (
-                <div
-                  key={label}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: SPACING.xs,
-                    backgroundColor: COLORS.surfaceActive,
-                    borderRadius: RADIUS.full,
-                    padding: `${SPACING.xs} ${SPACING.md}`,
-                    fontSize: FONTS.size.sm,
-                  }}
-                >
-                  <span style={{ fontWeight: FONTS.weight.bold, color }}>{value}</span>
-                  <span style={{ color: COLORS.textMuted }}>{label}</span>
-                </div>
-              ))}
-            </>
-          )}
-
-          <div style={{ flex: 1 }} />
-
-          {/* Agent filter */}
-          <select
-            value={agentFilter}
-            onChange={(e) => setAgentFilter(e.target.value)}
-            style={{
-              ...STYLES.input,
-              width: "auto",
-              padding: `${SPACING.xs} ${SPACING.md}`,
-              fontSize: FONTS.size.sm,
-              cursor: "pointer",
-            }}
-          >
-            <option value="all">All Agents</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>{a.displayName || a.email || "Agent"}</option>
-            ))}
-          </select>
-
-          {/* View toggle */}
-          <div
-            style={{
-              display: "flex",
-              backgroundColor: COLORS.surfaceActive,
-              border: `1px solid ${COLORS.border}`,
-              borderRadius: RADIUS.base,
-              overflow: "hidden",
-            }}
-          >
-            {VIEWS.map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                style={{
-                  padding: `${SPACING.xs} ${SPACING.md}`,
-                  fontSize: FONTS.size.sm,
-                  fontFamily: FONTS.family,
-                  cursor: "pointer",
-                  border: "none",
-                  backgroundColor: view === v ? COLORS.primaryMuted : "transparent",
-                  color: view === v ? COLORS.primary : COLORS.textSecondary,
-                  fontWeight: view === v ? FONTS.weight.semibold : FONTS.weight.regular,
-                  transition: TRANSITIONS.fast,
-                }}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-
-          <button
-            onClick={fetchAll}
-            style={{ ...STYLES.buttonSecondary, fontSize: FONTS.size.sm, padding: `${SPACING.xs} ${SPACING.md}` }}
-          >
-            ↻
-          </button>
+      {/* Top bar */}
+      <div style={{backgroundColor:C.surface,borderBottom:`1px solid ${C.border}`,padding:"12px 20px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",flexShrink:0}}>
+        <div style={{marginRight:8}}>
+          <div style={{fontFamily:F.body,fontSize:10,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em"}}>Manager</div>
+          <div style={{fontFamily:F.heading,fontSize:18,fontWeight:700,color:C.text}}>Follow-up Calendar</div>
         </div>
-
-        {/* ── Calendar nav bar ── */}
-        <div
-          style={{
-            padding: `${SPACING.sm} ${SPACING["2xl"]}`,
-            borderBottom: `1px solid ${COLORS.border}`,
-            display: "flex",
-            alignItems: "center",
-            gap: SPACING.base,
-            flexShrink: 0,
-          }}
-        >
-          <button
-            onClick={() => navigate(-1)}
-            style={{
-              ...STYLES.buttonSecondary,
-              padding: `${SPACING.xs} ${SPACING.md}`,
-              fontSize: FONTS.size.base,
-            }}
-          >
-            ‹
-          </button>
-          <button
-            onClick={() => navigate(1)}
-            style={{
-              ...STYLES.buttonSecondary,
-              padding: `${SPACING.xs} ${SPACING.md}`,
-              fontSize: FONTS.size.base,
-            }}
-          >
-            ›
-          </button>
-
-          <div
-            style={{
-              fontSize: FONTS.size.xl,
-              fontWeight: FONTS.weight.semibold,
-              color: COLORS.textPrimary,
-              flex: 1,
-            }}
-          >
-            {cursorLabel}
+        {/* Stats */}
+        {!loading&&[
+          {label:"Due Today",value:dueToday.length,color:C.gold},
+          {label:"Completed",value:doneTod.length,color:C.green},
+          {label:"Overdue",  value:overdueAll.length,color:overdueAll.length>0?C.red:C.textMuted},
+        ].map(({label,value,color})=>(
+          <div key={label} style={{display:"flex",alignItems:"center",gap:6,backgroundColor:C.surfaceHov,borderRadius:20,padding:"5px 12px"}}>
+            <span style={{fontFamily:F.heading,fontSize:15,fontWeight:700,color}}>{value}</span>
+            <span style={{fontFamily:F.body,fontSize:11,color:C.textSub}}>{label}</span>
           </div>
-
-          <button
-            onClick={goToday}
-            style={{
-              ...STYLES.buttonSecondary,
-              padding: `${SPACING.xs} ${SPACING.md}`,
-              fontSize: FONTS.size.sm,
-              backgroundColor: sameDay(cursor, today()) ? COLORS.primaryMuted : "transparent",
-              color: sameDay(cursor, today()) ? COLORS.primary : COLORS.textSecondary,
-              borderColor: sameDay(cursor, today()) ? COLORS.primary : COLORS.border,
-            }}
-          >
-            Today
-          </button>
-        </div>
-
-        {/* ── Error ── */}
-        {error && (
-          <div style={{ backgroundColor: COLORS.dangerMuted, border: `1px solid ${COLORS.danger}`, borderRadius: RADIUS.md, padding: SPACING.base, color: COLORS.danger, fontSize: FONTS.size.sm, margin: SPACING.base }}>
-            ⚠ {error}
-          </div>
-        )}
-
-        {/* ── Calendar body ── */}
-        {loading ? (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: SPACING.sm, padding: SPACING.xl }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: SPACING.sm }}>
-              {Array.from({ length: 7 }).map((_, i) => <Shimmer key={i} height="32px" />)}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: SPACING.sm, flex: 1 }}>
-              {Array.from({ length: 35 }).map((_, i) => <Shimmer key={i} height="80px" />)}
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: view === "Day" ? `${SPACING.xl} 0 0` : 0 }}>
-            {view === "Month" && (
-              <MonthView
-                cursor={cursor}
-                followUps={followUps}
-                onFuClick={setSelectedFu}
-                agentFilter={agentFilter}
-                agentMap={agentMap}
-              />
-            )}
-            {view === "Week" && (
-              <WeekView
-                cursor={cursor}
-                followUps={followUps}
-                onFuClick={setSelectedFu}
-                agentFilter={agentFilter}
-              />
-            )}
-            {view === "Day" && (
-              <DayView
-                cursor={cursor}
-                followUps={followUps}
-                onFuClick={setSelectedFu}
-                agentFilter={agentFilter}
-                agentMap={agentMap}
-              />
-            )}
-          </div>
-        )}
-
-        {/* ── Legend ── */}
-        <div
-          style={{
-            padding: `${SPACING.sm} ${SPACING["2xl"]}`,
-            borderTop: `1px solid ${COLORS.border}`,
-            display: "flex",
-            gap: SPACING.xl,
-            flexShrink: 0,
-            backgroundColor: COLORS.surface,
-          }}
-        >
-          {Object.entries(STATUS_META).map(([key, meta]) => (
-            <div key={key} style={{ display: "flex", alignItems: "center", gap: SPACING.xs }}>
-              <div style={{ width: "8px", height: "8px", borderRadius: "2px", backgroundColor: meta.color }} />
-              <span style={{ fontSize: FONTS.size.xs, color: COLORS.textMuted }}>{meta.label}</span>
-            </div>
+        ))}
+        <div style={{flex:1}} />
+        {/* Agent filter */}
+        <select value={agentF} onChange={e=>setAgentF(e.target.value)} style={{backgroundColor:C.surfaceHov,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 12px",color:C.text,fontFamily:F.body,fontSize:13,cursor:"pointer",outline:"none"}}>
+          <option value="all">All Agents</option>
+          {agents.map(a=><option key={a.id} value={a.id}>{a.displayName||a.email||"Agent"}</option>)}
+        </select>
+        {/* View toggle */}
+        <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          {["Day","Week","Month"].map(v=>(
+            <button key={v} onClick={()=>setView(v)} style={{fontFamily:F.body,fontSize:13,fontWeight:600,padding:"7px 14px",minHeight:36,border:"none",backgroundColor:view===v?C.goldMuted:"transparent",color:view===v?C.gold:C.textSub,cursor:"pointer"}}>
+              {v}
+            </button>
           ))}
         </div>
+        <span style={{fontFamily:F.body,fontSize:12,color:C.green}}>● Live</span>
       </div>
 
-      {/* ── Follow-up detail drawer ── */}
-      {selectedFu && (
-        <DetailDrawer
-          fu={selectedFu}
-          onClose={() => setSelectedFu(null)}
-          agentMap={agentMap}
-        />
-      )}
-    </>
-  );
-};
+      {/* Nav bar */}
+      <div style={{backgroundColor:C.surface,borderBottom:`1px solid ${C.border}`,padding:"10px 20px",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <button onClick={()=>nav(-1)} style={{fontFamily:F.body,fontSize:18,fontWeight:700,padding:"5px 12px",minHeight:36,border:`1px solid ${C.border}`,borderRadius:8,backgroundColor:"transparent",color:C.text,cursor:"pointer"}}>‹</button>
+        <button onClick={()=>nav(1)}  style={{fontFamily:F.body,fontSize:18,fontWeight:700,padding:"5px 12px",minHeight:36,border:`1px solid ${C.border}`,borderRadius:8,backgroundColor:"transparent",color:C.text,cursor:"pointer"}}>›</button>
+        <div style={{fontFamily:F.heading,fontSize:18,fontWeight:700,color:C.text,flex:1}}>{cursorLabel}</div>
+        <button onClick={()=>setCursor(today0())} style={{fontFamily:F.body,fontSize:13,fontWeight:600,padding:"7px 14px",minHeight:36,border:`1px solid ${sameDay(cursor,today0())?C.gold:C.border}`,borderRadius:8,backgroundColor:sameDay(cursor,today0())?C.goldMuted:"transparent",color:sameDay(cursor,today0())?C.gold:C.textSub,cursor:"pointer"}}>Today</button>
+      </div>
 
+      {/* Calendar body */}
+      {loading?(
+        <div style={{flex:1,padding:20,display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:8}}>
+          {Array.from({length:35}).map((_,i)=><Shimmer key={i} h={80} />)}
+        </div>
+      ):(
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {view==="Month"&&<MonthView cursor={cursor} fus={fus} agentFilter={agentF} agentMap={agentMap} onChipClick={setSelFu} />}
+          {view==="Week" &&<WeekView  cursor={cursor} fus={fus} agentFilter={agentF} onChipClick={setSelFu} />}
+          {view==="Day"  &&<DayView   cursor={cursor} fus={fus} agentFilter={agentF} agentMap={agentMap} onChipClick={setSelFu} />}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{backgroundColor:C.surface,borderTop:`1px solid ${C.border}`,padding:"8px 20px",display:"flex",gap:20,flexShrink:0,flexWrap:"wrap"}}>
+        {Object.entries(STATUS_META).map(([key,m])=>(
+          <div key={key} style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:8,height:8,borderRadius:2,backgroundColor:m.color}} />
+            <span style={{fontFamily:F.body,fontSize:11,color:C.textSub}}>{m.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {selFu&&<Drawer fu={selFu} agentMap={agentMap} onClose={()=>setSelFu(null)} />}
+  </>);
+};
 export default FollowUpCalendar;
