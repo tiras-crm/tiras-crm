@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#121212" />
+    <meta name="background-color" content="#121212" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- ── SEO & Social ──────────────────────────────────────────────────── -->
+    <meta name="description" content="TIRAS CRM — The complete telecalling and lead management CRM for Indian SMBs. AI call summaries, click-to-call, pipeline management, and more." />
+    <meta name="keywords" content="CRM, telecalling, lead management, Indian SMB, sales pipeline, call recording, AI summary" />
+    <meta name="author" content="TIRAS CRM" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph (WhatsApp, LinkedIn previews) -->
+    <meta property="og:title"       content="TIRAS CRM — Beyond Every Limit" />
+    <meta property="og:description" content="Complete telecalling CRM for Indian small and medium businesses. AI-powered call summaries, click-to-call, pipeline management." />
+    <meta property="og:type"        content="website" />
+    <meta property="og:image"       content="%PUBLIC_URL%/og-image.png" />
+    <meta property="og:url"         content="https://tirascrm.in" />
+    <meta property="og:site_name"   content="TIRAS CRM" />
+
+    <!-- Twitter card -->
+    <meta name="twitter:card"        content="summary_large_image" />
+    <meta name="twitter:title"       content="TIRAS CRM" />
+    <meta name="twitter:description" content="Complete telecalling CRM for Indian SMBs." />
+    <meta name="twitter:image"       content="%PUBLIC_URL%/og-image.png" />
+
+    <!-- ── PWA / Mobile ─────────────────────────────────────────────────── -->
+    <meta name="mobile-web-app-capable"       content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title"   content="TIRAS CRM" />
+    <meta name="format-detection"             content="telephone=yes" />
+    <meta name="HandheldFriendly"             content="True" />
+    <meta name="MobileOptimized"              content="320" />
+
+    <!-- ── Icons ────────────────────────────────────────────────────────── -->
+    <link rel="icon"             type="image/png"  href="%PUBLIC_URL%/favicon.png" />
+    <link rel="apple-touch-icon" sizes="180x180"   href="%PUBLIC_URL%/apple-touch-icon.png" />
+    <link rel="manifest"                           href="%PUBLIC_URL%/manifest.json" />
+
+    <!-- ── Title ────────────────────────────────────────────────────────── -->
+    <title>TIRAS CRM</title>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         GOOGLE FONTS — Preconnect for fastest load
+         Playfair Display: headings, stat numbers, logo
+         DM Sans:          all body text, labels, buttons, inputs
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         PLIVO BROWSER SDK
+         Required for Click-to-Call (WebRTC) — plivoService.js uses window.Plivo
+         Loaded from Plivo CDN — no npm install needed for this SDK
+         Version 2.x — matches plivoService.js integration
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <script
+      src="https://cdn.plivo.com/sdk/browser/v2/pl.min.js"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         RAZORPAY CHECKOUT SDK
+         Required for payment link flow — loaded globally so it is available
+         before any React component mounts
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         BASE STYLES
+         Minimal reset applied before React mounts
+         Prevents flash of unstyled content (FOUC) on dark background
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <style>
+      /* ── Hard reset ──────────────────────────────────────────────────── */
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      /* ── Root ────────────────────────────────────────────────────────── */
+      html {
+        font-size: 16px;
+        -webkit-text-size-adjust: 100%;
+        scroll-behavior: smooth;
+      }
+
+      body {
+        background-color: #121212;       /* COLORS.background — no flash */
+        color: #F5F5F5;                  /* COLORS.textPrimary */
+        font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        overflow-x: hidden;              /* Master doc: no horizontal scroll */
+        min-height: 100vh;
+      }
+
+      #root {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── Scrollbars — thin dark style ───────────────────────────────── */
+      ::-webkit-scrollbar               { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track         { background: #1A1A1B; }
+      ::-webkit-scrollbar-thumb         { background: #2A2A2B; border-radius: 9999px; }
+      ::-webkit-scrollbar-thumb:hover   { background: #3A3A3B; }
+      ::-webkit-scrollbar-corner        { background: #1A1A1B; }
+
+      /* Firefox */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: #2A2A2B #1A1A1B;
+      }
+
+      /* ── Selection ───────────────────────────────────────────────────── */
+      ::selection      { background-color: rgba(212, 175, 55, 0.25); color: #F5F5F5; }
+      ::-moz-selection { background-color: rgba(212, 175, 55, 0.25); color: #F5F5F5; }
+
+      /* ── Focus ring — gold, accessible ──────────────────────────────── */
+      :focus-visible {
+        outline: 2px solid #D4AF37;
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
+
+      /* ── Links — no default blue ─────────────────────────────────────── */
+      a { color: inherit; text-decoration: none; }
+
+      /* ── Images & media ──────────────────────────────────────────────── */
+      img, video, svg { max-width: 100%; display: block; }
+
+      /* ── Buttons & inputs — inherit font ─────────────────────────────── */
+      button, input, select, textarea {
+        font-family: inherit;
+        font-size: inherit;
+        color: inherit;
+      }
+
+      /* Remove number input spinners */
+      input[type="number"]::-webkit-inner-spin-button,
+      input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+      input[type="number"] { -moz-appearance: textfield; }
+
+      /* ── Select — dark dropdown ──────────────────────────────────────── */
+      select option {
+        background-color: #1A1A1B;
+        color: #F5F5F5;
+      }
+
+      /* ── Drag-and-drop cursors (Kanban) ──────────────────────────────── */
+      [draggable="true"] { cursor: grab; }
+      [draggable="true"]:active { cursor: grabbing; }
+
+      /* ── App loading skeleton ────────────────────────────────────────── */
+      /* Shown in the <div id="root"> before React hydrates */
+      #tiras-boot-loader {
+        position: fixed;
+        inset: 0;
+        background: #121212;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        z-index: 9999;
+        transition: opacity 0.3s ease;
+      }
+      #tiras-boot-loader.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .tiras-boot-logo {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        background-color: #D4AF37;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 24px rgba(212, 175, 55, 0.3);
+        animation: boot-pulse 2s ease-in-out infinite;
+      }
+      .tiras-boot-logo span {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 22px;
+        font-weight: 700;
+        color: #000000;
+      }
+      .tiras-boot-ring {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: 3px solid #2A2A2B;
+        border-top: 3px solid #D4AF37;
+        animation: boot-spin 0.75s linear infinite;
+      }
+      .tiras-boot-text {
+        font-family: 'DM Sans', sans-serif;
+        font-size: 12px;
+        color: #555555;
+        letter-spacing: 0.04em;
+      }
+      @keyframes boot-spin  { to { transform: rotate(360deg); } }
+      @keyframes boot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+      /* ── Mobile touch ─────────────────────────────────────────────────── */
+      @media (max-width: 768px) {
+        /* Larger tap targets on mobile — master doc: min 44px height */
+        button, [role="button"], a, label, select {
+          min-height: 44px;
+        }
+        /* Prevent double-tap zoom on buttons */
+        button { touch-action: manipulation; }
+      }
+
+      /* ── Print ───────────────────────────────────────────────────────── */
+      @media print {
+        body { background: white; color: black; }
+        .tiras-sidebar, .tiras-navbar { display: none !important; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- Noscript fallback -->
+    <noscript>
+      <div style="padding:40px;text-align:center;font-family:sans-serif;background:#121212;color:#F5F5F5;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;">
+        <strong style="font-size:20px;">TIRAS CRM requires JavaScript</strong>
+        <p style="color:#9A9A9A;max-width:360px;line-height:1.6;">
+          Please enable JavaScript in your browser to use TIRAS CRM.
+        </p>
+      </div>
+    </noscript>
+
+    <!-- Boot loader — visible before React mounts, hidden after -->
+    <div id="tiras-boot-loader" aria-hidden="true">
+      <div class="tiras-boot-logo"><span>T</span></div>
+      <div class="tiras-boot-ring"></div>
+      <div class="tiras-boot-text">Loading TIRAS CRM…</div>
+    </div>
+
+    <!-- React root -->
+    <div id="root"></div>
+
+    <!-- Hide boot loader once React takes over -->
+    <script>
+      (function () {
+        var loader = document.getElementById('tiras-boot-loader');
+        if (!loader) return;
+
+        // MutationObserver watches for React mounting into #root
+        var observer = new MutationObserver(function () {
+          var root = document.getElementById('root');
+          if (root && root.children.length > 0) {
+            loader.classList.add('hidden');
+            setTimeout(function () {
+              if (loader.parentNode) loader.parentNode.removeChild(loader);
+            }, 350);
+            observer.disconnect();
+          }
+        });
+
+        observer.observe(document.getElementById('root') || document.body, {
+          childList: true,
+          subtree:   true,
+        });
+
+        // Fallback: remove after 6s regardless
+        setTimeout(function () {
+          loader.classList.add('hidden');
+          observer.disconnect();
+        }, 6000);
+      })();
+    </script>
+  </body>
+</html>
