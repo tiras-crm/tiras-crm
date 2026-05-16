@@ -171,7 +171,7 @@ export const PlatformAnalytics = () => {
         <StatCard icon="🏢" label="Active Companies" value={loading?"…":activeCompanies}                   sub={`${convRate}% rate`}  color={C.blue}   loading={loading} />
         <StatCard icon="📋" label="Platform Leads"   value={loading?"…":totalLeads.toLocaleString("en-IN")} sub="all companies"       color={C.purple} loading={loading} />
         <StatCard icon="📞" label="Calls (6M)"       value={loading?"…":calls.length.toLocaleString("en-IN")} sub="all agents"        color={C.warn}   loading={loading} />
-        <StatCard icon="💵" label="Avg Rev / Co"     value={loading?"…":fmtRupee(avgRev)}                  sub="active only"         color:"#EC4899"  color={"#EC4899"} loading={loading} />
+        <StatCard icon="💵" label="Avg Rev / Co" value={loading?"…":fmtRupee(avgRev)} sub="active only" color={"#EC4899"} loading={loading} />                  sub="active only"         color:"#EC4899"  color={"#EC4899"} loading={loading} />
       </div>
 
       {/* Row 1: Growth area chart + Plan pie */}
