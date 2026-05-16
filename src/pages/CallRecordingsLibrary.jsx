@@ -25,7 +25,7 @@ const SH={sm:"0 1px 3px rgba(0,0,0,0.4)",md:"0 4px 16px rgba(0,0,0,0.5)"};
 const OUTCOMES=["Interested","Not Interested","Call Back","No Answer","Wrong Number","Busy","Voicemail"];
 const OUTCOME_C={"Interested":C.success,"Not Interested":C.red,"Call Back":C.warning,"No Answer":C.sub,"Wrong Number":C.red,"Busy":C.warning,"Voicemail":C.info};
 
-const fmtDur=(s)=>{if(!s&&s!==0)return"—";return`${Math.floor(s/60)}:${String(s%60).padStart(2,"0");}`;};
+const fmtDur=(s)=>{if(!s&&s!==0)return"—";return`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;};
 const fmtDate=(ts)=>{if(!ts)return"—";const d=ts.toDate?ts.toDate():new Date(ts);const diff=Math.floor((Date.now()-d)/1000);if(diff<60)return"Just now";if(diff<3600)return`${Math.floor(diff/60)}m ago`;if(diff<86400)return`${Math.floor(diff/3600)}h ago`;if(diff<604800)return`${Math.floor(diff/86400)}d ago`;return d.toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"});};
 
 const SK=({w="100%",h="14px",r=R.md})=>(<div style={{width:w,height:h,borderRadius:r,background:`linear-gradient(90deg,${C.surface} 25%,#232325 50%,${C.surface} 75%)`,backgroundSize:"200% 100%",animation:"v2Shimmer 1.6s ease-in-out infinite",flexShrink:0}}/>);
